@@ -6,6 +6,7 @@
   import Login from "./pages/Login.svelte";
   import Overview from "./pages/Overview.svelte";
   import Requests from "./pages/Requests.svelte";
+  import Clients from "./pages/Clients.svelte";
   import Tools from "./pages/Tools.svelte";
   import Substitutions from "./pages/Substitutions.svelte";
   import Providers from "./pages/Providers.svelte";
@@ -17,6 +18,7 @@
   const NAV = [
     { id: "overview", label: "Overview", icon: "▤" },
     { id: "requests", label: "Requests", icon: "⇄" },
+    { id: "clients", label: "Clients", icon: "◎" },
     { id: "tools", label: "Tools & MCP", icon: "⌘" },
     { id: "substitutions", label: "Substitutions", icon: "⇋" },
     { id: "providers", label: "Providers", icon: "☁" },
@@ -29,6 +31,7 @@
   const views: Record<string, any> = {
     overview: Overview,
     requests: Requests,
+    clients: Clients,
     tools: Tools,
     substitutions: Substitutions,
     providers: Providers,

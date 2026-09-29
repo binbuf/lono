@@ -63,6 +63,7 @@ _ALLOWED: dict[str, Any] = {
     "upstream": True,
     "upstreams": True,
     "mcp": {"enabled", "timeout_s", "servers"},
+    "clients": {"labels"},
 }
 
 
@@ -116,6 +117,10 @@ class ConfigManager:
     def __init__(self, cfg: SecurityConfig) -> None:
         self.cfg = cfg
         self.path = Path(cfg.runtime_config_path) if cfg.runtime_config_path else None
+        # Pristine file+env configuration (before any runtime overrides). The
+        # runtime store is replayed onto this each time so removing an override
+        # truly removes it instead of deep-merging the old value back in.
+        self._base: dict[str, Any] = cfg.model_dump(mode="json")
         self._store: dict[str, Any] = {}
         self._listeners: list[Callable[[], None]] = []
 
@@ -157,7 +162,7 @@ class ConfigManager:
             logger.warning("could not persist runtime config %s: %s", self.path, exc)
 
     def _apply(self, data: dict[str, Any]) -> None:
-        merged = _deep_merge(self.cfg.model_dump(mode="json"), data)
+        merged = _deep_merge(self._base, data)
         validated = SecurityConfig.model_validate(_remove_nulls(merged))
         _copy_into(self.cfg, validated)
 
@@ -259,3 +264,27 @@ class ConfigManager:
             {"detectors": {"secrets": {"custom": [rule.model_dump(mode="json") for rule in rules]}}}
         )
         return True
+
+    # ------------------------------------------------------------ client labels
+
+    def client_labels(self) -> dict[str, str]:
+        return dict(self.cfg.clients.labels)
+
+    def set_client_label(self, client_id: str, label: str | None) -> dict[str, str]:
+        """Set (or clear, when falsy) a friendly name for a client fingerprint."""
+        labels = dict(self.cfg.clients.labels)
+        cleaned = (label or "").strip()
+        if cleaned:
+            labels[client_id] = cleaned
+        else:
+            labels.pop(client_id, None)
+        # Assign the whole map rather than deep-merging, so a removed label
+        # actually disappears from both the store and the live config.
+        clients = self._store.get("clients")
+        clients = dict(clients) if isinstance(clients, dict) else {}
+        clients["labels"] = labels
+        self._store["clients"] = clients
+        self._apply(self._store)
+        self._persist()
+        self._notify()
+        return self.client_labels()

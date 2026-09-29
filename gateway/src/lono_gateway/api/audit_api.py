@@ -62,12 +62,27 @@ def dashboard(
     return data
 
 
+def _client_labels(request: Request) -> dict[str, str]:
+    return request.app.state.config_manager.client_labels()
+
+
+def _apply_client_label(request: Request, record: dict[str, Any]) -> dict[str, Any]:
+    key = record.get("client_key") or record.get("client_id")
+    label = _client_labels(request).get(key) if key else None
+    if label:
+        record["client_label"] = label
+    return record
+
+
 @router.get("/requests")
 def list_requests(
     request: Request,
     q: str | None = Query(default=None, description="Full-text query across original/sanitized/raw/final"),
     session_id: str | None = None,
+    client_id: str | None = Query(default=None, description="Client key from /audit/clients"),
     model: str | None = None,
+    provider: str | None = None,
+    path: str | None = None,
     status: str | None = None,
     mode: str | None = None,
     since: str | None = None,
@@ -76,10 +91,13 @@ def list_requests(
     offset: int = Query(default=0, ge=0),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
-    return request.app.state.store.list_requests(
+    result = request.app.state.store.list_requests(
         query=q,
         session_id=session_id,
+        client_id=client_id,
         model=model,
+        provider=provider,
+        path=path,
         status=status,
         mode=mode,
         since=since,
@@ -87,6 +105,79 @@ def list_requests(
         limit=limit,
         offset=offset,
     )
+    labels = _client_labels(request)
+    for item in result["items"]:
+        key = item.get("client_key")
+        if key and key in labels:
+            item["client_label"] = labels[key]
+    return result
+
+
+@router.get("/clients")
+def list_clients(
+    request: Request,
+    q: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    """Aggregated view of clients connecting to the gateway."""
+    result = request.app.state.store.list_clients(
+        query=q, since=since, until=until, limit=limit, offset=offset
+    )
+    labels = _client_labels(request)
+    for item in result["items"]:
+        if item["client_id"] in labels:
+            item["label"] = labels[item["client_id"]]
+    return result
+
+
+@router.get("/clients/{client_key:path}")
+def get_client(
+    request: Request,
+    client_key: str,
+    hours: int = Query(default=24, ge=1, le=24 * 30),
+    limit: int = Query(default=25, ge=1, le=200),
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    """One client: lifetime totals, breakdowns, header samples and recent requests."""
+    store = request.app.state.store
+    detail = store.client_detail(client_key, hours=hours)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="client not found")
+    labels = _client_labels(request)
+    detail["label"] = labels.get(client_key, detail.get("label"))
+    recent = store.list_requests(client_id=client_key, limit=limit)["items"]
+    for item in recent:
+        key = item.get("client_key")
+        if key and key in labels:
+            item["client_label"] = labels[key]
+    detail["recent"] = recent
+    return detail
+
+
+class ClientLabelRequest(BaseModel):
+    label: str | None = None
+
+
+@router.put("/clients/{client_key:path}")
+def set_client_label(
+    request: Request,
+    client_key: str,
+    body: ClientLabelRequest,
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    """Set (or clear) a friendly name for a client fingerprint."""
+    request.app.state.config_manager.set_client_label(client_key, body.label)
+    return {"client_id": client_key, "label": (body.label or "").strip()}
+
+
+@router.delete("/clients/{client_key:path}")
+def clear_client_label(request: Request, client_key: str, _: None = Depends(require_admin)) -> dict[str, Any]:
+    request.app.state.config_manager.set_client_label(client_key, None)
+    return {"client_id": client_key, "cleared": True}
 
 
 @router.get("/requests/{request_id}")
@@ -94,7 +185,7 @@ def get_request(request: Request, request_id: str, _: None = Depends(require_adm
     record = request.app.state.store.get_request(request_id)
     if record is None:
         raise HTTPException(status_code=404, detail="request not found")
-    return record
+    return _apply_client_label(request, record)
 
 
 @router.delete("/requests/{request_id}")

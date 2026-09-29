@@ -2,6 +2,7 @@
   import { onMount, tick } from "svelte";
   import type { Api, Finding, RequestDetail, ToolEvent } from "../lib/api";
   import { fmtCost, fmtDuration, fmtTime, fmtNumber, prettyJson } from "../lib/format";
+  import { goQuery } from "../lib/router.svelte";
 
   let {
     api,
@@ -246,6 +247,18 @@
       <span><b>shape</b>{record.api_shape}</span>
       <span><b>mode</b>{record.mode}</span>
       <span><b>session</b><span class="mono">{record.session_id ?? "—"}</span></span>
+      <span>
+        <b>client</b>
+        {#if record.client_key}
+          <button
+            class="link mono"
+            title={record.client_key}
+            onclick={() => record && goQuery("requests", { client: record.client_key })}
+          >{record.client_label || record.client_key.slice(0, 14)}</button>
+        {:else}
+          <span class="muted">—</span>
+        {/if}
+      </span>
       <span><b>latency</b>{fmtDuration(record.latency_ms)}</span>
       <span><b>tokens</b>{fmtNumber(record.total_tokens)} ({fmtNumber(record.prompt_tokens)} in / {fmtNumber(record.completion_tokens)} out)</span>
       <span><b>cost</b>{fmtCost(record.cost_usd)}</span>
@@ -402,8 +415,18 @@
       {/if}
 
       {#if record.client_meta && Object.keys(record.client_meta).length}
-        <h4>Client</h4>
-        <pre class="stage small">{prettyJson(record.client_meta)}</pre>
+        <h4>Incoming HTTP</h4>
+        <p class="muted small">
+          Headers captured from the client's request. Credential headers are never stored.
+        </p>
+        <table class="grid compact">
+          <thead><tr><th>header</th><th>value</th></tr></thead>
+          <tbody>
+            {#each Object.entries(record.client_meta) as [key, value] (key)}
+              <tr><td class="mono">{key}</td><td class="mono wrap">{value}</td></tr>
+            {/each}
+          </tbody>
+        </table>
       {/if}
     </div>
   {:else}

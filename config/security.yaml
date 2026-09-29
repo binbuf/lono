@@ -227,6 +227,16 @@ upstreams: []
 #   base_url: https://api.openai.com/v1
 #   models: ["gpt-*", "o1-*", "o3-*"]
 
+# Friendly names for connecting clients, keyed by the anonymous fingerprint
+# shown on the console's Clients page. Normally managed from the console
+# (Clients -> open a client -> Save name) and persisted to runtime_config.json;
+# set them here to seed an install.
+clients:
+  labels: {}
+  # labels:
+  #   "a1b2c3d4e5f60718": "laptop"
+  #   "0011223344556677": "ci-runner"
+
 auth:
   admin_key: ${LONO_ADMIN_KEY:-}
   allow_unauthenticated_audit: false

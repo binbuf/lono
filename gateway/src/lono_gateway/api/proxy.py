@@ -87,6 +87,12 @@ def _parse_cost(value: str | None) -> float | None:
         return None
 
 
+def _credential_fingerprint(request: Request) -> str:
+    """A non-reversible fingerprint of the caller credential (never the raw key)."""
+    credential = request.headers.get("authorization") or request.headers.get("x-api-key") or ""
+    return hashlib.sha256(credential.encode("utf-8")).hexdigest()[:12]
+
+
 def _session_identity(request: Request, payload: dict | None) -> tuple[str, str | None]:
     headers = request.headers
     metadata = payload.get("metadata") if isinstance(payload, dict) else None
@@ -97,20 +103,82 @@ def _session_identity(request: Request, payload: dict | None) -> tuple[str, str 
     if not session and isinstance(payload, dict):
         session = metadata.get("session_id") or payload.get("user")
     if not session:
-        authorization = headers.get("authorization") or headers.get("x-api-key") or ""
-        digest = hashlib.sha256(authorization.encode("utf-8")).hexdigest()[:12]
-        session = f"key-{digest}"
+        session = f"key-{_credential_fingerprint(request)}"
     return str(session), project
+
+
+def _client_id(request: Request) -> str:
+    """Stable anonymous id for the connecting client.
+
+    Derived from the credential, any explicit ``x-lono-client`` name and the
+    user agent, so two workloads behind the same key but different harnesses
+    stay distinct. Only the hash is stored.
+    """
+    credential = request.headers.get("authorization") or request.headers.get("x-api-key") or ""
+    named = request.headers.get("x-lono-client", "")
+    user_agent = request.headers.get("user-agent", "")
+    material = "\x00".join((credential, named, user_agent))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+
+# Headers worth showing in the HTTP inspector. Anything credential-shaped is
+# dropped even if it somehow matched, so keys/tokens/cookies never persist.
+_SAFE_HEADER_NAMES = {
+    "accept",
+    "accept-encoding",
+    "accept-language",
+    "content-type",
+    "host",
+    "origin",
+    "referer",
+    "x-forwarded-for",
+    "x-real-ip",
+    "x-request-id",
+}
+_UNSAFE_HEADER_TOKENS = (
+    "authorization",
+    "auth",
+    "cookie",
+    "key",
+    "token",
+    "secret",
+    "password",
+    "credential",
+    "signature",
+)
+
+
+_SAFE_HEADER_PREFIXES = ("x-lono-", "x-stainless-")
+
+
+def _short_user_agent(value: str) -> str:
+    """A compact label from the leading product token of a User-Agent."""
+    token = value.strip().split(" ", 1)[0]
+    name, separator, version = token.partition("/")
+    if separator:
+        return f"{name.replace('_', ' ')} {version}".strip()
+    return token
 
 
 def _client_meta(request: Request) -> dict[str, str]:
     meta: dict[str, str] = {}
     for key, value in request.headers.items():
         lowered = key.lower()
-        if lowered == "user-agent":
-            meta["user-agent"] = value
-        elif lowered.startswith("x-lono-") and lowered != "x-lono-mode":
-            meta[lowered] = value
+        if lowered == "x-lono-mode" or any(token in lowered for token in _UNSAFE_HEADER_TOKENS):
+            continue
+        if lowered == "user-agent" or lowered in _SAFE_HEADER_NAMES or lowered.startswith(_SAFE_HEADER_PREFIXES):
+            meta[lowered] = value[:300]
+            if len(meta) >= 24:
+                break
+    user_agent = request.headers.get("user-agent", "")
+    short = _short_user_agent(user_agent)
+    if short:
+        meta["client"] = short
+    if request.client and request.client.host:
+        meta["client_host"] = request.client.host
+    http_version = request.scope.get("http_version")
+    if http_version:
+        meta["http_version"] = http_version
     return meta
 
 
@@ -191,6 +259,7 @@ async def _handle(request: Request) -> Response:
 
     stream_requested = bool(payload.get("stream")) if payload else False
     session_id, project = _session_identity(request, payload)
+    client_id = _client_id(request)
     mode = cfg.mode
     if cfg.allow_client_mode_override:
         override = (request.headers.get("x-lono-mode") or "").strip().lower()
@@ -248,6 +317,7 @@ async def _handle(request: Request) -> Response:
             path=path,
             model=(payload or {}).get("model"),
             provider=upstream.name,
+            client_id=client_id,
             stream=1 if stream_requested else 0,
             status="pending",
             request_original=json.dumps(original_audit, ensure_ascii=False)

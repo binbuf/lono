@@ -316,6 +316,16 @@ class AuthConfig(BaseModel):
     require_client_key: bool = False
 
 
+class ClientsConfig(BaseModel):
+    """Console-managed names for connecting clients.
+
+    Keyed by the anonymous client fingerprint, so users can label a client
+    without any client-side configuration. Stored in ``runtime_config.json``.
+    """
+
+    labels: dict[str, str] = Field(default_factory=dict)
+
+
 class SecurityConfig(BaseModel):
     mode: Mode = "sanitize"
     fail_closed: bool = False
@@ -332,6 +342,7 @@ class SecurityConfig(BaseModel):
     upstreams: list[UpstreamConfig] = Field(default_factory=list)
     mcp: McpConfig = Field(default_factory=McpConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    clients: ClientsConfig = Field(default_factory=ClientsConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     # SQLite/JSON store for console-managed runtime overrides. Empty disables
     # runtime persistence (changes live only for the process lifetime).

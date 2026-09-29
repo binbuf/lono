@@ -111,7 +111,8 @@ Add to OpenCode (~/.config/opencode/opencode.json or project opencode.json):
       "name": "Lono Gateway",
       "options": {
         "baseURL": "http://127.0.0.1:${GATEWAY_PORT}/v1",
-        "apiKey": "${MASTER_KEY}"
+        "apiKey": "${MASTER_KEY}",
+        "headers": { "X-Lono-Client": "opencode" }
       },
       "models": {
         "deepseek-v4.1-flash": { "name": "DeepSeek V4.1 Flash" },
@@ -125,4 +126,9 @@ Add to OpenCode (~/.config/opencode/opencode.json or project opencode.json):
     }
   }
 }
+
+Optional: name your client so the Clients page is easy to read (X-Lono-Client).
+  Codex:        [model_providers.lono.http_headers]  X-Lono-Client = "codex"
+  Claude Code:  ANTHROPIC_CUSTOM_HEADERS="X-Lono-Client: claude-code"
+  Any client:   send X-Lono-Client, or rename it later from the console.
 EOF

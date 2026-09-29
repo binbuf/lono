@@ -22,6 +22,9 @@ export interface RequestSummary {
   path: string;
   model: string | null;
   provider: string | null;
+  client_id: string | null;
+  client_key: string;
+  client_label?: string | null;
   stream: number;
   status: string;
   http_status: number | null;
@@ -61,6 +64,32 @@ export interface RequestDetail extends Omit<RequestSummary, "changes" | "changes
   has_original: boolean;
   client_meta?: Record<string, string> | null;
   media?: unknown;
+}
+
+export interface ClientSummary {
+  client_id: string;
+  requests: number;
+  sessions: number;
+  errors: number;
+  blocked: number;
+  tokens: number;
+  cost_usd: number;
+  avg_latency_ms: number | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  user_agent: string | null;
+  label: string | null;
+  provider: string | null;
+}
+
+export interface ClientDetail extends ClientSummary {
+  window: { hours: number; since: string; requests: number };
+  by_model: { model: string; requests: number; tokens: number }[];
+  by_path: { path: string; requests: number; errors: number }[];
+  by_status: { status: string; count: number }[];
+  by_provider: { provider: string; requests: number }[];
+  header_samples: Record<string, string>[];
+  recent: RequestSummary[];
 }
 
 export interface Bucket {
@@ -303,6 +332,10 @@ export class Api {
 
   patch<T>(path: string, body: unknown): Promise<T> {
     return this.request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
+  }
+
+  put<T>(path: string, body?: unknown): Promise<T> {
+    return this.request<T>(path, { method: "PUT", body: body === undefined ? undefined : JSON.stringify(body) });
   }
 
   del<T>(path: string): Promise<T> {

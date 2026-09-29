@@ -24,6 +24,7 @@ _BEGIN_FIELDS = {
     "path",
     "model",
     "provider",
+    "client_id",
     "stream",
     "status",
     "created_at",
@@ -56,10 +57,23 @@ _COMPLETE_FIELDS = {
 }
 
 _SUMMARY_COLUMNS = (
-    "id, session_id, project, mode, api_shape, method, path, model, provider, stream, status, "
+    "id, session_id, project, mode, api_shape, method, path, model, provider, client_id, stream, status, "
     "http_status, blocked, error, created_at, completed_at, latency_ms, prompt_tokens, "
-    "completion_tokens, total_tokens, cost_usd, findings_count, findings_json"
+    "completion_tokens, total_tokens, cost_usd, findings_count, findings_json, "
+    "COALESCE(client_id, 'legacy-' || COALESCE(session_id, 'unknown')) AS client_key"
 )
+
+# Older records predate the ``client_id`` column; group them by session so the
+# console still shows something useful. New requests always carry a real id.
+_CLIENT_KEY = "COALESCE(r.client_id, 'legacy-' || COALESCE(r.session_id, 'unknown'))"
+_LEGACY_PREFIX = "legacy-"
+
+
+def _client_key_condition(key: str) -> tuple[str, list[Any]]:
+    """WHERE fragment selecting the rows that belong to a client key."""
+    if key.startswith(_LEGACY_PREFIX):
+        return "r.client_id IS NULL AND r.session_id = ?", [key[len(_LEGACY_PREFIX) :]]
+    return "r.client_id = ?", [key]
 
 # Actions that actually rewrote text; everything else (flag/observed/allow) is noise
 # for the console's "what changed" view.
@@ -77,6 +91,7 @@ CREATE TABLE IF NOT EXISTS requests (
     path TEXT NOT NULL,
     model TEXT,
     provider TEXT,
+    client_id TEXT,
     stream INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL,
     http_status INTEGER,
@@ -301,6 +316,13 @@ class AuditStore:
     def _init_schema(self) -> None:
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            # Databases created before the column existed need it added; the
+            # FTS triggers rewrite on UPDATE so we intentionally do not backfill
+            # (legacy rows are grouped by session at query time instead).
+            columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(requests)")}
+            if "client_id" not in columns:
+                self._conn.execute("ALTER TABLE requests ADD COLUMN client_id TEXT")
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_client ON requests(client_id)")
             self._conn.commit()
 
     def _execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
@@ -366,7 +388,10 @@ class AuditStore:
         *,
         query: str | None = None,
         session_id: str | None = None,
+        client_id: str | None = None,
         model: str | None = None,
+        provider: str | None = None,
+        path: str | None = None,
         status: str | None = None,
         mode: str | None = None,
         since: str | None = None,
@@ -384,9 +409,19 @@ class AuditStore:
         if session_id:
             conditions.append("r.session_id = ?")
             params.append(session_id)
+        if client_id:
+            condition, client_params = _client_key_condition(client_id)
+            conditions.append(condition)
+            params.extend(client_params)
         if model:
             conditions.append("r.model = ?")
             params.append(model)
+        if provider:
+            conditions.append("r.provider = ?")
+            params.append(provider)
+        if path:
+            conditions.append("r.path = ?")
+            params.append(path)
         if status:
             conditions.append("r.status = ?")
             params.append(status)
@@ -437,6 +472,154 @@ class AuditStore:
                 (limit,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_clients(
+        self,
+        *,
+        query: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Aggregate connecting clients (anonymous fingerprints) over requests."""
+        conditions: list[str] = []
+        params: list[Any] = []
+        if since:
+            conditions.append("r.created_at >= ?")
+            params.append(since)
+        if until:
+            conditions.append("r.created_at <= ?")
+            params.append(until)
+        if query:
+            needle = f"%{query}%"
+            conditions.append(
+                f"({_CLIENT_KEY} LIKE ? OR COALESCE(json_extract(r.client_meta_json, '$.\"user-agent\"'), '') LIKE ? "
+                "OR COALESCE(r.project, '') LIKE ?)"
+            )
+            params.extend([needle, needle, needle])
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        limit = max(1, min(limit, 500))
+        with self._lock:
+            total = self._conn.execute(
+                f"SELECT COUNT(*) AS count FROM (SELECT {_CLIENT_KEY} AS key FROM requests r {where} "
+                "GROUP BY key)",
+                tuple(params),
+            ).fetchone()["count"]
+            rows = self._conn.execute(
+                f"SELECT {_CLIENT_KEY} AS client_id, COUNT(*) AS requests, "
+                "COUNT(DISTINCT r.session_id) AS sessions, "
+                "SUM(CASE WHEN r.status IN ('error','upstream_error') THEN 1 ELSE 0 END) AS errors, "
+                "SUM(COALESCE(r.blocked, 0)) AS blocked, "
+                "SUM(COALESCE(r.total_tokens, 0)) AS tokens, "
+                "SUM(COALESCE(r.cost_usd, 0)) AS cost_usd, "
+                "AVG(r.latency_ms) AS avg_latency_ms, "
+                "MIN(r.created_at) AS first_seen, MAX(r.created_at) AS last_seen, "
+                "MAX(json_extract(r.client_meta_json, '$.\"user-agent\"')) AS user_agent, "
+                "MAX(COALESCE(json_extract(r.client_meta_json, '$.\"x-lono-client\"'), "
+                "json_extract(r.client_meta_json, '$.\"client\"'), r.project)) AS label, "
+                "MAX(r.provider) AS provider "
+                f"FROM requests r {where} GROUP BY {_CLIENT_KEY} ORDER BY last_seen DESC LIMIT ? OFFSET ?",
+                (*params, limit, max(0, offset)),
+            ).fetchall()
+        items = [dict(row) for row in rows]
+        for item in items:
+            item["avg_latency_ms"] = int(item["avg_latency_ms"]) if item["avg_latency_ms"] is not None else None
+        return {"total": total, "limit": limit, "offset": max(0, offset), "items": items}
+
+    def client_detail(self, key: str, *, hours: int = 24) -> dict[str, Any] | None:
+        """One client: lifetime totals plus recent breakdowns and header samples."""
+        condition, params = _client_key_condition(key)
+        hours = max(1, min(int(hours), 24 * 30))
+        since = (datetime.now(UTC) - timedelta(hours=hours)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        with self._lock:
+            summary = self._conn.execute(
+                f"SELECT {_CLIENT_KEY} AS client_id, COUNT(*) AS requests, "
+                "COUNT(DISTINCT r.session_id) AS sessions, "
+                "SUM(CASE WHEN r.status IN ('error','upstream_error') THEN 1 ELSE 0 END) AS errors, "
+                "SUM(COALESCE(r.blocked, 0)) AS blocked, "
+                "SUM(COALESCE(r.total_tokens, 0)) AS tokens, "
+                "SUM(COALESCE(r.cost_usd, 0)) AS cost_usd, "
+                "AVG(r.latency_ms) AS avg_latency_ms, "
+                "MIN(r.created_at) AS first_seen, MAX(r.created_at) AS last_seen, "
+                "MAX(json_extract(r.client_meta_json, '$.\"user-agent\"')) AS user_agent, "
+                "MAX(COALESCE(json_extract(r.client_meta_json, '$.\"x-lono-client\"'), "
+                "json_extract(r.client_meta_json, '$.\"client\"'), r.project)) AS label "
+                f"FROM requests r WHERE {condition} GROUP BY {_CLIENT_KEY}",
+                tuple(params),
+            ).fetchone()
+            if summary is None:
+                return None
+            by_model = [
+                dict(row)
+                for row in self._conn.execute(
+                    "SELECT COALESCE(r.model, '(unknown)') AS model, COUNT(*) AS requests, "
+                    "SUM(COALESCE(r.total_tokens, 0)) AS tokens FROM requests r "
+                    f"WHERE {condition} GROUP BY model ORDER BY requests DESC LIMIT 10",
+                    tuple(params),
+                ).fetchall()
+            ]
+            by_path = [
+                dict(row)
+                for row in self._conn.execute(
+                    "SELECT r.path, COUNT(*) AS requests, "
+                    "SUM(CASE WHEN r.status IN ('error','upstream_error') THEN 1 ELSE 0 END) AS errors "
+                    f"FROM requests r WHERE {condition} GROUP BY r.path ORDER BY requests DESC LIMIT 10",
+                    tuple(params),
+                ).fetchall()
+            ]
+            by_status = [
+                dict(row)
+                for row in self._conn.execute(
+                    "SELECT r.status, COUNT(*) AS count FROM requests r "
+                    f"WHERE {condition} GROUP BY r.status ORDER BY count DESC",
+                    tuple(params),
+                ).fetchall()
+            ]
+            by_provider = [
+                dict(row)
+                for row in self._conn.execute(
+                    "SELECT COALESCE(r.provider, '(default)') AS provider, COUNT(*) AS requests "
+                    f"FROM requests r WHERE {condition} GROUP BY provider ORDER BY requests DESC LIMIT 10",
+                    tuple(params),
+                ).fetchall()
+            ]
+            headers = [
+                dict(row)
+                for row in self._conn.execute(
+                    "SELECT DISTINCT r.client_meta_json FROM requests r "
+                    f"WHERE {condition} AND r.client_meta_json IS NOT NULL AND r.client_meta_json != '{{}}' "
+                    "ORDER BY r.created_at DESC LIMIT 10",
+                    tuple(params),
+                ).fetchall()
+            ]
+            recent_window = self._conn.execute(
+                "SELECT COUNT(*) AS count FROM requests r "
+                f"WHERE {condition} AND r.created_at >= ?",
+                (*params, since),
+            ).fetchone()["count"]
+        detail = dict(summary)
+        detail["avg_latency_ms"] = int(detail["avg_latency_ms"]) if detail["avg_latency_ms"] is not None else None
+        detail["window"] = {"hours": hours, "since": since, "requests": recent_window}
+        detail["by_model"] = by_model
+        detail["by_path"] = by_path
+        detail["by_status"] = by_status
+        detail["by_provider"] = by_provider
+        samples: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in headers:
+            raw = row.get("client_meta_json")
+            if not raw or raw in seen:
+                continue
+            seen.add(raw)
+            try:
+                parsed = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(parsed, dict) and parsed:
+                samples.append(parsed)
+        detail["header_samples"] = samples[:8]
+        return detail
 
     def stats(self) -> dict[str, Any]:
         with self._lock:

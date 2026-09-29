@@ -111,7 +111,8 @@ Write-Host @"
       "name": "Lono Gateway",
       "options": {
         "baseURL": "http://127.0.0.1:$gatewayPort/v1",
-        "apiKey": "$masterKey"
+        "apiKey": "$masterKey",
+        "headers": { "X-Lono-Client": "opencode" }
       },
       "models": {
         "deepseek-v4.1-flash": { "name": "DeepSeek V4.1 Flash" },
@@ -126,3 +127,8 @@ Write-Host @"
   }
 }
 "@ -ForegroundColor Gray
+Write-Host ""
+Write-Host "Optional: name your client so the Clients page is easy to read (X-Lono-Client)."
+Write-Host "  Codex:        [model_providers.lono.http_headers]  X-Lono-Client = \"codex\""
+Write-Host "  Claude Code:  ANTHROPIC_CUSTOM_HEADERS=\"X-Lono-Client: claude-code\""
+Write-Host "  Any client:   send X-Lono-Client, or rename it later from the console."

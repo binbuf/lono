@@ -6,6 +6,7 @@
   import RequestDetail from "../components/RequestDetail.svelte";
 
   const TRANSFORMED = new Set(["pseudonymized", "masked", "stripped"]);
+  const PAGE = 50;
 
   let { api, status }: { api: Api; status: (msg: string, isError?: boolean) => void } = $props();
 
@@ -14,6 +15,7 @@
     { id: "request", label: "request" },
     { id: "model", label: "model" },
     { id: "provider", label: "provider" },
+    { id: "client", label: "client" },
     { id: "session", label: "session" },
     { id: "status", label: "status" },
     { id: "tokens", label: "tokens" },
@@ -30,7 +32,12 @@
   let onlyChanged = $state(false);
   let expanded = $state<Record<string, boolean>>({});
   let filters = $state<Record<string, string>>({});
+  let clientFilter = $state("");
+  let providerFilter = $state("");
+  let statusFilter = $state("");
+  let loading = $state(false);
   const inspectId = $derived(queryParam("id"));
+  const hasMore = $derived(items.length > 0 && items.length < total);
 
   function columnText(item: RequestSummary, column: ColumnId): string {
     switch (column) {
@@ -42,6 +49,8 @@
         return item.model || "";
       case "provider":
         return item.provider || "";
+      case "client":
+        return item.client_label || item.client_key || item.client_id || "";
       case "session":
         return item.session_id || "";
       case "status":
@@ -60,25 +69,48 @@
     }
   }
 
-  async function load(): Promise<void> {
+  async function load(reset = true): Promise<void> {
+    if (loading) return;
+    loading = true;
     try {
-      const params = new URLSearchParams({ limit: "300" });
+      const params = new URLSearchParams();
+      params.set("limit", String(PAGE));
+      params.set("offset", String(reset ? 0 : items.length));
       if (query.trim()) params.set("q", query.trim());
+      if (clientFilter.trim()) params.set("client_id", clientFilter.trim());
+      if (providerFilter.trim()) params.set("provider", providerFilter.trim());
+      if (statusFilter.trim()) params.set("status", statusFilter.trim());
       const data = await api.get<{ items: RequestSummary[]; total: number }>("/audit/requests?" + params);
-      items = data.items || [];
+      items = reset ? data.items || [] : [...items, ...(data.items || [])];
       total = data.total || 0;
       status("");
     } catch (error) {
       status((error as Error).message, true);
+    } finally {
+      loading = false;
     }
+  }
+
+  function resetFilters(): void {
+    query = "";
+    clientFilter = "";
+    providerFilter = "";
+    statusFilter = "";
+    load(true);
   }
 
   onMount(() => {
     const session = queryParam("session");
     if (session) filters = { ...filters, session };
-    load();
+    const client = queryParam("client");
+    if (client) clientFilter = client;
+    const provider = queryParam("provider");
+    if (provider) providerFilter = provider;
+    load(true);
+    // Refresh only the first page; once you page deeper the interval stays quiet
+    // so it never fights your scroll or stacks requests.
     const timer = setInterval(() => {
-      if (auto) load();
+      if (auto && !loading && items.length <= PAGE) load(true);
     }, 5000);
     return () => clearInterval(timer);
   });
@@ -94,10 +126,15 @@
     ),
   );
 
-  let columns = COLUMNS;
+  const columns = COLUMNS;
 
   function open(id: string): void {
     goQuery("requests", { id });
+  }
+
+  function filterByClient(key: string): void {
+    clientFilter = key;
+    load(true);
   }
 </script>
 
@@ -107,21 +144,41 @@
       class="wide"
       placeholder="search all four audit stages (full text)"
       bind:value={query}
-      onkeydown={(e) => e.key === "Enter" && load()}
+      onkeydown={(e) => e.key === "Enter" && load(true)}
     />
-    <button class="primary" onclick={load}>Refresh</button>
+    <input
+      placeholder="client id"
+      bind:value={clientFilter}
+      onkeydown={(e) => e.key === "Enter" && load(true)}
+    />
+    <input
+      placeholder="provider"
+      bind:value={providerFilter}
+      onkeydown={(e) => e.key === "Enter" && load(true)}
+    />
+    <select bind:value={statusFilter} onchange={() => load(true)}>
+      <option value="">any status</option>
+      <option value="pending">pending</option>
+      <option value="completed">completed</option>
+      <option value="blocked">blocked</option>
+      <option value="error">error</option>
+      <option value="upstream_error">upstream_error</option>
+      <option value="client_disconnected">client_disconnected</option>
+    </select>
+    <button class="primary" onclick={() => load(true)} disabled={loading}>{loading ? "Loading…" : "Refresh"}</button>
     <label class="check"><input type="checkbox" bind:checked={auto} /> auto 5s</label>
     <label class="check"><input type="checkbox" bind:checked={revealAll} /> reveal values</label>
     <label class="check"><input type="checkbox" bind:checked={onlyChanged} /> only changed</label>
-    <button class="ghost" onclick={() => (filters = {})}>Clear filters</button>
+    <button class="ghost" onclick={resetFilters}>Clear</button>
     <div class="spacer"></div>
-    <span class="muted">{filtered.length} of {items.length} · {fmtNumber(total)} total</span>
+    <span class="muted">{filtered.length} of {items.length} loaded · {fmtNumber(total)} total</span>
   </div>
 
   <p class="muted small">
-    Each line maps a category to its original value (red) and the obfuscated value (green); values stay hidden
-    until you reveal them. Category badges below list every detection, including ones that were only flagged.
-    Filter the changes column to narrow by category or value. Click any row to inspect all four stages.
+    Loaded {items.length} of {fmtNumber(total)} requests — the list pages 50 at a time so large audits stay fast. Each
+    line maps a category to its original value (red) and the obfuscated value (green); values stay hidden until you
+    reveal them. Search and the tool filters run server-side; the per-column boxes filter the rows already loaded.
+    Click any row to inspect all four stages.
   </p>
 
   <div class="table-scroll">
@@ -151,6 +208,20 @@
             <td class="mono wrap">{columnText(item, "request")}</td>
             <td>{item.model || ""}</td>
             <td>{item.provider || ""}</td>
+            <td class="mono">
+              {#if item.client_key}
+                <button
+                  class="link"
+                  title={item.client_key}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    filterByClient(item.client_key);
+                  }}>{item.client_label || item.client_key.slice(0, 12)}</button
+                >
+              {:else}
+                <span class="muted">—</span>
+              {/if}
+            </td>
             <td class="mono">{columnText(item, "session")}</td>
             <td class="act">{item.status}{item.blocked ? " (blocked)" : ""}</td>
             <td class="right">{fmtNumber(item.total_tokens)}</td>
@@ -224,6 +295,14 @@
       </tbody>
     </table>
   </div>
+
+  {#if hasMore}
+    <div class="row end">
+      <button class="ghost" onclick={() => load(false)} disabled={loading}>
+        {loading ? "Loading…" : `Load more (${fmtNumber(total - items.length)} remaining)`}
+      </button>
+    </div>
+  {/if}
 </div>
 
 {#if inspectId}

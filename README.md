@@ -123,7 +123,8 @@ prints it). Model names are whatever you declare in `config/litellm.yaml`.
       "name": "Lono Gateway",
       "options": {
         "baseURL": "http://127.0.0.1:4000/v1",
-        "apiKey": "<LITELLM_MASTER_KEY>"
+        "apiKey": "<LITELLM_MASTER_KEY>",
+        "headers": { "X-Lono-Client": "opencode" }
       },
       "models": {
         "deepseek-v4.1-flash": { "name": "DeepSeek V4.1 Flash" },
@@ -154,6 +155,36 @@ curl http://127.0.0.1:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"Email Steve at steve@mycompany.com"}]}'
 ```
+
+### Identify your clients (optional)
+
+The **Clients** page groups traffic by an anonymous fingerprint of the
+credential, user agent and any `X-Lono-Client` header, so it works without any
+client change. For a friendly name you can either send the header — supported by
+OpenCode, Codex, Claude Code and any SDK that lets you set headers — or rename
+the fingerprint once from the console (Clients → open a client → **Save name**),
+which persists in `runtime_config.json` and works even for clients that can't
+send headers.
+
+```jsonc
+// OpenCode: provider.<id>.options.headers
+"headers": { "X-Lono-Client": "opencode" }
+```
+
+```toml
+# Codex CLI: ~/.codex/config.toml
+[model_providers.lono.http_headers]
+"X-Lono-Client" = "codex"
+```
+
+```bash
+# Claude Code (v2.1.227+)
+export ANTHROPIC_CUSTOM_HEADERS="X-Lono-Client: claude-code"
+```
+
+The gateway also records `X-Stainless-*` (OpenAI/Anthropic SDK language,
+runtime, OS and package version) and parses the user agent, so harnesses that
+skip the header still show up by name. Credential headers are never captured.
 
 Streaming (SSE) is supported, including rehydration of pseudonyms split across
 chunks and tool-call argument deltas.
@@ -449,11 +480,21 @@ admin key and audit text is rendered as text (never HTML). Pages:
   completion) and cost, latency avg/max and percentiles, findings by
   action/category/detector, models, providers, top tools and MCP servers over
   1h/6h/24h/7d/30d windows.
-- **Requests** — live filtering log with a per-request **changes** column. Red
-  is the original text, green is what replaced it. Secret and PII values stay
-  blurred until you reveal them. Click a row for the **request detail** drawer:
-  a redaction timeline, tool activity, client metadata and the four raw audit
-  stages.
+- **Requests** — paged filtering log (50 rows at a time, "Load more") with a
+  per-request **changes** column. Red is the original text, green is what
+  replaced it. Secret and PII values stay blurred until you reveal them. Full-
+  text search and the client/provider/status filters run server-side; the
+  per-column boxes filter the rows already loaded. Click a row for the
+  **request detail** drawer: a redaction timeline, tool activity, the captured
+  incoming HTTP headers and the four raw audit stages.
+- **Clients** — who is connecting to Lono. Each client is fingerprinted by an
+  anonymous hash of its credential, user agent and any `x-lono-client` header
+  (the API key itself is never stored), with a name parsed from the user agent and
+  the `X-Lono-Client` / `X-Stainless-*` headers. Shows requests, sessions,
+  blocks, errors, tokens, cost and first/last seen per client over a time
+  window, with a drill-down for top models/paths and sampled incoming HTTP
+  headers. Rename any client from its drill-down; names persist in
+  `runtime_config.json` and show up on the Requests page too.
 - **Tools & MCP** — every tool call, shell command and MCP JSON-RPC message,
   each linked back to the request (task) that produced it, with filters and
   summary charts.
@@ -465,6 +506,12 @@ admin key and audit text is rendered as text (never HTML). Pages:
   audit retention) and save it live.
 - **Overrides** / **Mappings** / **Sessions** — allow-through controls,
   pseudonym mappings and session activity.
+
+The client aggregation is also on the API: `GET /audit/clients` (with `q`,
+`since`, `limit`, `offset`) and `GET /audit/clients/{client_key}` for one
+client's totals, breakdowns, header samples and recent requests. Filter the
+request log with `GET /audit/requests?client_id={client_key}` (and `provider=`,
+`path=`).
 
 The app is served without auth; the API needs the admin key. To rebuild the
 console after editing `gateway/ui/`:
