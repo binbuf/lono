@@ -17,6 +17,14 @@ def test_config_snapshot_redacts_secrets(client) -> None:
     assert "upstreams" in data
 
 
+def test_auth_probe_requires_admin_and_skips_store(client) -> None:
+    assert client.get("/audit/auth").status_code == 401
+    assert client.get("/audit/auth", headers={"x-lono-admin-key": "nope"}).status_code == 401
+    response = client.get("/audit/auth", headers=ADMIN)
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
 def test_config_patch_changes_live_mode(client, upstream) -> None:
     upstream.responder = lambda request, body: httpx.Response(200, json={"ok": True})
     patched = client.patch("/audit/config", json={"mode": "observe"}, headers=ADMIN)

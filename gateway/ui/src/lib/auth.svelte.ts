@@ -30,7 +30,7 @@ export async function validateKey(): Promise<boolean> {
   }
   auth.status = "checking";
   try {
-    await new Api(auth.key).get("/audit/stats");
+    await new Api(auth.key).get("/audit/auth");
     auth.status = "valid";
     auth.error = "";
     return true;

@@ -70,9 +70,7 @@
   });
 </script>
 
-{#if auth.status !== "valid"}
-  <Login {status} />
-{:else}
+{#if auth.status === "valid"}
   <div class="layout">
     <aside class="sidebar">
       <div class="brand">
@@ -108,6 +106,12 @@
       </main>
     </div>
   </div>
+{:else if auth.key && auth.status !== "invalid"}
+  <div class="login">
+    <div class="muted">Checking admin key…</div>
+  </div>
+{:else}
+  <Login {status} />
 {/if}
 
 {#if toast.msg}

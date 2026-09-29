@@ -45,6 +45,12 @@ def require_admin(request: Request) -> None:
         raise HTTPException(status_code=401, detail="invalid admin key", headers={"WWW-Authenticate": "Bearer"})
 
 
+@router.get("/auth")
+def check_auth(_: None = Depends(require_admin)) -> dict[str, bool]:
+    """Cheap admin-key probe for the console login check (no store queries)."""
+    return {"ok": True}
+
+
 @router.get("/stats")
 def stats(request: Request, _: None = Depends(require_admin)) -> dict[str, Any]:
     return request.app.state.store.stats()
