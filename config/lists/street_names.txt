@@ -1,0 +1,29 @@
+# Lono replacement list for category: street_names
+# One value per line. Blank lines and # comments are ignored.
+# Swap this file or point pseudonymization.lists at your own.
+
+Maple
+Oak
+Cedar
+Birch
+Pine
+Elm
+Walnut
+Chestnut
+Juniper
+Aspen
+Lakeview
+Riverside
+Hillcrest
+Sunset
+Highland
+Meadow
+Prairie
+Canyon
+Harbor
+Bayside
+Foxglove
+Bluebell
+Willow
+Sycamore
+Magnolia

@@ -26,6 +26,8 @@ DEFAULT_PII_ACTIONS: dict[str, str] = {
     "ORGANIZATION": "pseudonymize",
     "IP_ADDRESS": "pseudonymize",
     "NRP": "pseudonymize",
+    "STREET_ADDRESS": "pseudonymize",
+    "POSTAL_CODE": "pseudonymize",
     "CREDIT_CARD": "mask",
     "US_SSN": "mask",
     "US_PASSPORT": "mask",
@@ -33,6 +35,9 @@ DEFAULT_PII_ACTIONS: dict[str, str] = {
     "MEDICAL_LICENSE": "mask",
     "IBAN_CODE": "mask",
     "CRYPTO": "mask",
+    "BTC_ADDRESS": "mask",
+    "ETH_ADDRESS": "mask",
+    "MAC_ADDRESS": "flag",
     "DATE_TIME": "flag",
     "URL": "flag",
 }
@@ -86,12 +91,35 @@ class UrlsConfig(BaseModel):
     allow_schemes: list[str] = Field(default_factory=lambda: ["http", "https"])
 
 
+class WatchTerm(BaseModel):
+    term: str
+    category: str = "SENSITIVE_TERM"
+    action: Literal["pseudonymize", "mask", "flag", "block"] = "pseudonymize"
+    match: Literal["word", "substring", "regex"] = "word"
+    case_sensitive: bool = False
+    replacement_type: str = ""
+
+
+class WatchlistConfig(BaseModel):
+    enabled: bool = True
+    file: str = "${LONO_CONFIG_DIR:-/config}/watchlist.yaml"
+    terms: list[WatchTerm] = Field(default_factory=list)
+
+
 class OutputScanConfig(BaseModel):
     enabled: bool = True
     secrets: bool = True
     injection: bool = True
     pii: bool = True
+    watchlist: bool = True
     action: Literal["flag", "mask"] = "flag"
+
+
+class OverridesConfig(BaseModel):
+    enabled: bool = True
+    cache_seconds: float = 3.0
+    default_max_minutes: int = 60
+    allow_permanent: bool = True
 
 
 class DetectorsConfig(BaseModel):
@@ -104,6 +132,8 @@ class DetectorsConfig(BaseModel):
 class PseudonymizationConfig(BaseModel):
     secret: str = ""
     stable_across_sessions: bool = False
+    lists_dir: str = "${LONO_CONFIG_DIR:-/config}/lists"
+    lists: dict[str, str] = Field(default_factory=dict)
     pools: dict[str, list[str]] = Field(default_factory=dict)
 
 
@@ -173,8 +203,10 @@ class SecurityConfig(BaseModel):
     allow_client_mode_override: bool = False
     inspect_tools: bool = True
     detectors: DetectorsConfig = Field(default_factory=DetectorsConfig)
+    watchlist: WatchlistConfig = Field(default_factory=WatchlistConfig)
     output_scan: OutputScanConfig = Field(default_factory=OutputScanConfig)
     pseudonymization: PseudonymizationConfig = Field(default_factory=PseudonymizationConfig)
+    overrides: OverridesConfig = Field(default_factory=OverridesConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
     upstream: UpstreamConfig = Field(default_factory=UpstreamConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)

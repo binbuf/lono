@@ -25,6 +25,18 @@ _IPV4_RE = re.compile(
     r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b"
 )
 _IPV6_RE = re.compile(r"\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{0,4}\b")
+_STREET_RE = re.compile(
+    r"\b\d{1,5}\s+(?:[A-Z][A-Za-z0-9.'\-]*\s){1,4}"
+    r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|"
+    r"Place|Pl|Terrace|Ter|Highway|Hwy|Circle|Cir|Square|Sq|Parkway|Pkwy)\.?"
+    r"(?:\s*,?\s*(?:Suite|Ste|Apt|Unit|#)\s*[A-Za-z0-9\-]+)?",
+    re.IGNORECASE,
+)
+_POSTAL_UK_RE = re.compile(r"\b[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2}\b")
+_POSTAL_US_RE = re.compile(r"(?<=\b[A-Z]{2}\s)\d{5}(?:-\d{4})?\b")
+_BTC_RE = re.compile(r"\b(?:bc1[a-z0-9]{25,62}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})\b")
+_ETH_RE = re.compile(r"\b0x[a-fA-F0-9]{40}\b")
+_MAC_RE = re.compile(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
 
 _MAX_CC_DIGITS = 19
 
@@ -80,6 +92,18 @@ class _RegexPii:
         for match in _IPV6_RE.finditer(text):
             if "::" in match.group(0) or match.group(0).count(":") >= 3:
                 add("IP_ADDRESS", match.start(), match.end(), 0.6)
+        for match in _STREET_RE.finditer(text):
+            add("STREET_ADDRESS", match.start(), match.end(), 0.6)
+        for match in _POSTAL_UK_RE.finditer(text):
+            add("POSTAL_CODE", match.start(), match.end(), 0.7)
+        for match in _POSTAL_US_RE.finditer(text):
+            add("POSTAL_CODE", match.start(), match.end(), 0.6)
+        for match in _BTC_RE.finditer(text):
+            add("BTC_ADDRESS", match.start(), match.end(), 0.75, suggested="mask")
+        for match in _ETH_RE.finditer(text):
+            add("ETH_ADDRESS", match.start(), match.end(), 0.75, suggested="mask")
+        for match in _MAC_RE.finditer(text):
+            add("MAC_ADDRESS", match.start(), match.end(), 0.4, suggested="flag")
         for name, pattern, score, suggested in self.custom_patterns:
             for match in pattern.finditer(text):
                 add(name, match.start(), match.end(), score, suggested=suggested)

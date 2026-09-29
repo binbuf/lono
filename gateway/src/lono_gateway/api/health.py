@@ -51,4 +51,10 @@ async def root(request: Request) -> dict:
             "GET /audit/sessions",
             "GET /audit/stats",
         ],
+        "override_endpoints": [
+            "GET /audit/overrides",
+            "POST /audit/overrides",
+            "DELETE /audit/overrides/{id}",
+        ],
+        "console": "/ui",
     }

@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 import secrets
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
+
+from lono_gateway.models import normalize_key
 
 router = APIRouter(prefix="/audit", tags=["audit"])
+
+
+class OverrideRequest(BaseModel):
+    kind: Literal["category", "value"]
+    category: str = Field(min_length=1)
+    value: str | None = None
+    minutes: int | None = Field(default=None, ge=1, le=60 * 24 * 365)
+    note: str | None = None
+    permanent: bool = False
 
 
 def require_admin(request: Request) -> None:
@@ -93,6 +106,56 @@ def list_mappings(
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
     return {"items": request.app.state.store.list_mappings(scope, limit)}
+
+
+@router.get("/overrides")
+def list_overrides(
+    request: Request,
+    include_expired: bool = True,
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    return {"items": request.app.state.store.list_overrides(include_expired)}
+
+
+@router.post("/overrides")
+def create_override(
+    request: Request, body: OverrideRequest, _: None = Depends(require_admin)
+) -> dict[str, Any]:
+    cfg = request.app.state.settings
+    if not cfg.overrides.enabled:
+        raise HTTPException(status_code=400, detail="overrides are disabled in security.yaml")
+    if body.kind == "value" and not body.value:
+        raise HTTPException(status_code=422, detail="value is required for a value override")
+    if body.permanent and not cfg.overrides.allow_permanent:
+        raise HTTPException(status_code=400, detail="permanent overrides are disabled")
+
+    expires_at: str | None = None
+    if not body.permanent:
+        minutes = body.minutes or cfg.overrides.default_max_minutes
+        if minutes and minutes > 0:
+            expiry = datetime.now(UTC) + timedelta(minutes=minutes)
+            expires_at = expiry.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+    value_key = normalize_key(body.value) if body.value else None
+    record = request.app.state.store.add_override(
+        kind=body.kind,
+        category=body.category,
+        value_key=value_key,
+        value_display=body.value,
+        note=body.note,
+        expires_at=expires_at,
+    )
+    request.app.state.pipeline.invalidate_overrides()
+    return record
+
+
+@router.delete("/overrides/{override_id}")
+def revoke_override(request: Request, override_id: int, _: None = Depends(require_admin)) -> dict[str, Any]:
+    revoked = request.app.state.store.revoke_override(override_id)
+    request.app.state.pipeline.invalidate_overrides()
+    if not revoked:
+        raise HTTPException(status_code=404, detail="override not found or already revoked")
+    return {"revoked": True, "id": override_id}
 
 
 @router.get("/media/{sha256}")

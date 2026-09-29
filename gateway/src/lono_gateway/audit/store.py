@@ -119,6 +119,19 @@ CREATE TABLE IF NOT EXISTS media (
     first_request_id TEXT
 );
 
+CREATE TABLE IF NOT EXISTS overrides (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    category TEXT NOT NULL,
+    value_key TEXT,
+    value_display TEXT,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    expires_at TEXT,
+    revoked INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_overrides_active ON overrides(kind, category, revoked);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS requests_fts USING fts5(
     request_original,
     request_sanitized,
@@ -390,6 +403,83 @@ class AuditStore:
         with self._lock:
             row = self._conn.execute("SELECT * FROM media WHERE sha256 = ?", (sha256,)).fetchone()
         return dict(row) if row else None
+
+    # -------------------------------------------------------------- overrides
+
+    def add_override(
+        self,
+        *,
+        kind: str,
+        category: str,
+        value_key: str | None = None,
+        value_display: str | None = None,
+        note: str | None = None,
+        expires_at: str | None = None,
+    ) -> dict[str, Any]:
+        cursor = self._execute(
+            "INSERT INTO overrides (kind, category, value_key, value_display, note, created_at, expires_at, revoked) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
+            (kind, category, value_key, value_display, note, utc_now(), expires_at),
+        )
+        override = self.get_override(int(cursor.lastrowid))
+        assert override is not None
+        return override
+
+    def get_override(self, override_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM overrides WHERE id = ?", (override_id,)).fetchone()
+        return dict(row) if row else None
+
+    def list_overrides(self, include_expired: bool = True) -> list[dict[str, Any]]:
+        conditions = ["revoked = 0"]
+        params: list[Any] = []
+        if not include_expired:
+            conditions.append("(expires_at IS NULL OR expires_at > ?)")
+            params.append(utc_now())
+        where = " AND ".join(conditions)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM overrides WHERE {where} ORDER BY created_at DESC", tuple(params)
+            ).fetchall()
+        now = utc_now()
+        items = []
+        for row in rows:
+            record = dict(row)
+            record["active"] = not record["revoked"] and (
+                record["expires_at"] is None or record["expires_at"] > now
+            )
+            items.append(record)
+        return items
+
+    def revoke_override(self, override_id: int) -> bool:
+        cursor = self._execute(
+            "UPDATE overrides SET revoked = 1 WHERE id = ? AND revoked = 0", (override_id,)
+        )
+        return cursor.rowcount > 0
+
+    def active_overrides(self) -> dict[str, Any]:
+        now = utc_now()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT kind, category, value_key FROM overrides "
+                "WHERE revoked = 0 AND (expires_at IS NULL OR expires_at > ?)",
+                (now,),
+            ).fetchall()
+        categories: set[str] = set()
+        values: dict[str, set[str]] = {}
+        for row in rows:
+            if row["kind"] == "category":
+                categories.add(row["category"])
+            elif row["value_key"]:
+                values.setdefault(row["category"], set()).add(row["value_key"])
+        return {"categories": categories, "values": values}
+
+    def prune_overrides(self) -> int:
+        cursor = self._execute(
+            "DELETE FROM overrides WHERE revoked = 1 OR (expires_at IS NOT NULL AND expires_at <= ?)",
+            (utc_now(),),
+        )
+        return cursor.rowcount
 
     def close(self) -> None:
         with self._lock:

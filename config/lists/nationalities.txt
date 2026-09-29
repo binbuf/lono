@@ -1,0 +1,19 @@
+# Lono replacement list for category: nationalities
+# One value per line. Blank lines and # comments are ignored.
+# Swap this file or point pseudonymization.lists at your own.
+
+Canadian
+Brazilian
+Norwegian
+Japanese
+Kenyan
+Portuguese
+Australian
+Mexican
+Polish
+Thai
+Dutch
+Argentine
+Finnish
+Moroccan
+Vietnamese

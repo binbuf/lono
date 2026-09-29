@@ -98,6 +98,7 @@ cat <<EOF
 
 Gateway:        http://127.0.0.1:${GATEWAY_PORT}/v1  (OpenAI-compatible)
 Anthropic API:  http://127.0.0.1:${GATEWAY_PORT}/v1/messages
+Console (UI):   http://127.0.0.1:${GATEWAY_PORT}/ui  (enter the admin key)
 Langfuse UI:    http://127.0.0.1:3000  (login: admin@lono.local / ${LANGFUSE_PASSWORD})
 MinIO console:  http://127.0.0.1:9091
 Audit API key:  ${ADMIN_KEY}

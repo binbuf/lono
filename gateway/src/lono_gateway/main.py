@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from lono_gateway import __version__
-from lono_gateway.api import audit_api, health, proxy
+from lono_gateway.api import audit_api, health, proxy, ui
 from lono_gateway.audit.langfuse import LangfuseTracer
 from lono_gateway.audit.media import MediaStore
 from lono_gateway.audit.store import AuditStore
@@ -71,6 +71,7 @@ def create_app(
     app.include_router(health.router)
     app.include_router(proxy.router)
     app.include_router(audit_api.router)
+    app.include_router(ui.router)
 
     @app.exception_handler(Exception)
     async def unhandled_exception(request: Request, exc: Exception) -> JSONResponse:  # noqa: ARG001

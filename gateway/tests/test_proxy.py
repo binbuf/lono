@@ -372,6 +372,66 @@ def test_models_endpoint_passthrough(client, upstream) -> None:
     assert response.json()["data"][0]["id"] == "deepseek-v4.1-flash"
 
 
+def _plain_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "x",
+            "model": "m",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+def test_category_override_allows_data_through(client, upstream) -> None:
+    created = client.post(
+        "/audit/overrides",
+        json={"kind": "category", "category": "EMAIL_ADDRESS", "minutes": 30, "note": "unit test"},
+        headers=ADMIN,
+    )
+    assert created.status_code == 200
+    upstream.responder = lambda request, parsed: _plain_response()
+
+    response = client.post("/v1/chat/completions", json=_chat_body(), headers=AUTH)
+    sent = upstream.last_body["messages"][0]["content"]
+    assert EMAIL in sent  # allowed through unchanged
+
+    record = client.get(f"/audit/requests/{response.headers['x-lono-request-id']}", headers=ADMIN).json()
+    assert any(finding["action"] == "allowed" for finding in record["findings"])
+    client.delete(f"/audit/overrides/{created.json()['id']}", headers=ADMIN)
+
+
+def test_value_override_only_allows_matching_value(client, upstream) -> None:
+    client.post(
+        "/audit/overrides",
+        json={"kind": "value", "category": "EMAIL_ADDRESS", "value": EMAIL, "minutes": 30},
+        headers=ADMIN,
+    )
+    upstream.responder = lambda request, parsed: _plain_response()
+
+    client.post(
+        "/v1/chat/completions",
+        json=_chat_body(f"write to {EMAIL} and also other@corp.com"),
+        headers=AUTH,
+    )
+    sent = upstream.last_body["messages"][0]["content"]
+    assert EMAIL in sent
+    assert "other@corp.com" not in sent
+    assert "@example.com" in sent
+
+
+def test_overrides_require_admin(client) -> None:
+    assert client.get("/audit/overrides").status_code == 401
+    assert client.post("/audit/overrides", json={"kind": "category", "category": "PERSON"}).status_code == 401
+
+
+def test_console_is_served(client) -> None:
+    response = client.get("/ui")
+    assert response.status_code == 200
+    assert "Lono Console" in response.text
+
+
 def test_audit_requires_admin_key(client) -> None:
     assert client.get("/audit/stats").status_code == 401
     assert client.get("/audit/stats", headers={"x-lono-admin-key": "nope"}).status_code == 401

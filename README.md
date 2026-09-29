@@ -46,6 +46,9 @@ OpenCode / Codex / Claude / Cursor / Harness
 | URLs | Scheme allowlist, private/loopback/metadata hosts (`169.254.169.254`), embedded credentials, opaque exfil-style query strings. |
 | Audit | Four stages persisted: client original, provider payload, raw provider response, final client response. Plus model, tokens, cost, latency, findings, session, media. Full-text search over all stages. |
 | Media | Images are content-addressed (SHA-256) into MinIO or a local CAS; identical images stored once. |
+| Watchlist | Your own terms — project codenames, internal names, ticket IDs — from `config/watchlist.yaml`, with per-term action and replacement type. |
+| Allow-through | Temporarily let a category or a specific value pass unchanged (e.g. a false positive), with expiry. Managed from the console or API. |
+| Console | A local web log at `/ui` showing every finding plus the four request stages, and controls to add/revoke allow-through overrides. |
 | Tracing | LiteLLM and the gateway both emit traces to self-hosted Langfuse. |
 
 **Modes** (`AI_GATEWAY_MODE`, default `sanitize`):
@@ -93,9 +96,10 @@ docker compose up -d
 |---|---|
 | Gateway (OpenAI-compatible) | `http://127.0.0.1:4000/v1` |
 | Gateway (Anthropic-compatible) | `http://127.0.0.1:4000/v1/messages` |
+| **Lono Console** | `http://127.0.0.1:4000/ui` (enter `LONO_ADMIN_KEY`) |
 | Langfuse UI | `http://127.0.0.1:3000` (`admin@lono.local` / password printed by installer) |
 | MinIO console | `http://127.0.0.1:9091` |
-| Audit API | `http://127.0.0.1:4000/audit` (Bearer `LONO_ADMIN_KEY`) |
+| Audit/override API | `http://127.0.0.1:4000/audit` (Bearer `LONO_ADMIN_KEY`) |
 
 Postgres, ClickHouse, Redis, MinIO S3 and Presidio are **not** published to the
 host; they are only reachable on the compose network.
@@ -193,6 +197,9 @@ Everything is feature-flagged in `config/security.yaml` (env-substituted with
 | `upstream.base_url` | LiteLLM or any OpenAI-compatible endpoint |
 | `allow_client_mode_override` | Allow `X-Lono-Mode: observe` per request (diagnostics) |
 | `inspect_tools` | Scan tool descriptions (flag-only) |
+| `pseudonymization.lists` / `lists_dir` | Per-category replacement word lists |
+| `watchlist.file` / `watchlist.terms` | Project codenames and internal terms |
+| `overrides.enabled` / `allow_permanent` | Runtime allow-through controls |
 
 ### Add providers/models
 
@@ -206,10 +213,147 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 ```
 
+### Replacement lists (make fakes fit your world)
+
+Every category draws its replacement values from a plain-text list, one value
+per line (`#` comments allowed). Shipped defaults live in `config/lists/`:
+
+```
+config/lists/first_names.txt   last_names.txt   cities.txt   companies.txt
+              domain_words.txt nationalities.txt street_names.txt street_suffixes.txt
+```
+
+Swap a file, add your own, or override inline. Relative names resolve against
+`pseudonymization.lists_dir`; `builtin` forces the shipped Python defaults.
+
+```yaml
+pseudonymization:
+  lists_dir: /config/lists
+  lists:
+    first_names: my_codewords.txt     # your own file
+  pools:                               # inline wins over files
+    cities: [Idris, Kestrel Falls]
+```
+
+Determinism is per session, so the same value maps to the same fake within a
+conversation and rehydrates correctly (`gateway/src/lono_gateway/pools.py`).
+
+#### Which categories are list-backed vs generated
+
+**List-backed by default** — the replacement is picked from one of the shipped
+`config/lists/*.txt` files (so it always looks like a plausible human value):
+
+| Category | Built from |
+|---|---|
+| `PERSON` | `first_names.txt` + `last_names.txt` (single names use a first name) |
+| `EMAIL_ADDRESS` | `first_names.txt` + `last_names.txt` → `first.last[N]@example.com` |
+| `LOCATION` | `cities.txt` |
+| `ORGANIZATION` | `companies.txt` |
+| `STREET_ADDRESS` | `street_names.txt` + `street_suffixes.txt` (plus a number/unit) |
+| `NRP`, `NATIONALITY` | `nationalities.txt` |
+| `URL`, `DOMAIN_NAME` | `domain_words.txt` |
+| `PROJECT`, `PROJECT_CODENAME`, `PROJECT_NAME` | `domain_words.txt` → `Project Aurora` |
+
+**Dynamically generated** (no list) — the value must satisfy a format, a
+reserved range, or a checksum, or is effectively unbounded, so a fixed list
+would be less convincing or invalid:
+
+| Category | Generated as | Why not a list |
+|---|---|---|
+| `PHONE_NUMBER` | `+1-555-01XX` | reserved fictional range, always well-formed |
+| `POSTAL_CODE` | random US 5-digit, or UK `AB1 2CD` shape | format depends on the original |
+| `IP_ADDRESS` / `IPV4` | `192.0.2.x` (TEST-NET-1) | reserved, never routable |
+| `IPV6` | `2001:db8::xxxx` | documentation range |
+| `MAC_ADDRESS` | random `xx:xx:…` | unbounded |
+| `CREDIT_CARD` | `4000…` with a valid Luhn check digit | must pass Luhn |
+| `US_SSN` | `666-xx-xxxx` | never-issued area |
+| `IBAN_CODE` | `GB00LONO…` | structurally right; **not** a valid checksum |
+| `BTC_ADDRESS` / `ETH_ADDRESS` / `CRYPTO` | `bc1q…` / `0x…` random hex | unbounded; not checksum-valid |
+| `DATE_TIME` | deterministic random date | shifting dates is riskier than masking |
+| anything else | `LONO-<CATEGORY>-<hex>` | unknown category, generic placeholder |
+
+#### Any category can be list-backed
+
+If you'd rather control a generated (or unknown) category yourself, add a file
+named after the category and map it — a literal pool always wins over
+generation:
+
+```yaml
+pseudonymization:
+  lists:
+    PHONE_NUMBER: phone_numbers.txt      # your own fake numbers
+    CUSTOMER_ID: customer_ids.txt        # used by a watchlist/pattern with that category
+```
+
+```text
+# config/lists/phone_numbers.txt
++44 20 7946 0001
++44 20 7946 0002
+```
+
+This also works for categories surfaced by Presidio or your own custom
+recognizers, and for watchlist terms via `replacement_type`.
+
+### Watchlist (project codenames, internal terms)
+
+`config/watchlist.yaml` (and/or inline `watchlist.terms`) catches strings no
+generic model would recognize:
+
+```yaml
+terms:
+  - term: "Project Bluebird"
+    category: PROJECT_CODENAME
+    replacement_type: PROJECT_CODENAME   # which fake generator to use
+    action: pseudonymize                 # pseudonymize | mask | flag | block
+    match: word                          # word | substring | regex
+  - term: '\bCUST-\d{6}\b'
+    category: CUSTOMER_ID
+    action: mask
+    match: regex
+```
+
+`block` terms only block in `enforce` mode; elsewhere they are flagged.
+
 ### Custom internal identifiers
 
 Add regex recognizers in `config/presidio/patterns.yaml`; they are merged with
 Presidio results and honor the same per-entity actions.
+
+### Allow-through overrides (the console)
+
+Some detections are false positives; you can let a category or one exact value
+pass through unchanged, still logged as `allowed`. Overrides have an optional
+TTL and are managed from the console (`/ui` → Overrides, or the "allow
+category / allow value" buttons on any finding) or the API:
+
+```bash
+# allow all EMAIL_ADDRESS values through for 60 minutes
+curl -X POST http://127.0.0.1:4000/audit/overrides \
+  -H "Authorization: Bearer $LONO_ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"kind":"category","category":"EMAIL_ADDRESS","minutes":60,"note":"false positive"}'
+
+# allow one specific value through
+curl -X POST http://127.0.0.1:4000/audit/overrides \
+  -H "Authorization: Bearer $LONO_ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"kind":"value","category":"PERSON","value":"Public Speaker","minutes":120}'
+
+curl -X DELETE http://127.0.0.1:4000/audit/overrides/<id> \
+  -H "Authorization: Bearer $LONO_ADMIN_KEY"
+```
+
+A category override matches the finding kind, the detector name, or
+`detector:kind` (e.g. `PERSON`, `secrets`, `pii.regex:EMAIL_ADDRESS`).
+Expired and revoked overrides are ignored automatically. Set
+`overrides.allow_permanent: false` to forbid non-expiring overrides.
+
+### The console
+
+`http://127.0.0.1:4000/ui` is a single local page (no build step, no external
+assets). Enter the admin key once; it is kept in your browser's local storage.
+It shows the live filtering log, the four stages of every request, findings
+with their action, the pseudonym mappings, and override management. The page
+shell is served without auth; every data call requires the admin key, and
+audit text is rendered as text (never HTML).
 
 ## Security notes
 
@@ -270,7 +414,8 @@ media content-addressing.
 
 ```
 compose.yaml            full stack (gateway, litellm, presidio, langfuse, minio, dbs)
-config/                 security.yaml, litellm.yaml, presidio/patterns.yaml
+config/                 security.yaml, litellm.yaml, presidio/patterns.yaml,
+                        watchlist.yaml, lists/*.txt (replacement word lists)
 gateway/                thin Python gateway (FastAPI): pipeline, audit, proxy
 scripts/                install/start/stop for Windows (.ps1) and macOS/Linux (.sh)
 data/                   runtime state: audit.db, media CAS (gitignored)

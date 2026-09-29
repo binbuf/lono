@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lono Console</title>
+<style>
+  :root { color-scheme: dark; --bg:#0f1216; --panel:#171c22; --panel2:#1e252d; --line:#2b3540;
+          --fg:#d7dee6; --muted:#8b98a5; --accent:#4da3ff; --ok:#3fb950; --warn:#d29922; --err:#f85149; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         background:var(--bg); color:var(--fg); }
+  header { display:flex; align-items:center; gap:16px; padding:12px 18px; border-bottom:1px solid var(--line);
+           background:var(--panel); position:sticky; top:0; z-index:5; flex-wrap:wrap; }
+  h1 { font-size:17px; margin:0; font-weight:600; letter-spacing:.3px; }
+  .badge { font-size:11px; text-transform:uppercase; letter-spacing:.5px; padding:2px 8px; border-radius:10px;
+           background:var(--panel2); border:1px solid var(--line); color:var(--muted); }
+  .spacer { flex:1; }
+  .auth { display:flex; align-items:center; gap:8px; }
+  input, select, button, textarea { font:inherit; color:var(--fg); background:var(--panel2);
+           border:1px solid var(--line); border-radius:6px; padding:6px 9px; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#04121f; font-weight:600; }
+  #status { font-size:12px; color:var(--muted); }
+  #status.err { color:var(--err); }
+  nav { display:flex; gap:6px; padding:10px 18px 0; }
+  nav button { background:transparent; border:1px solid transparent; border-bottom:none; border-radius:6px 6px 0 0; color:var(--muted); }
+  nav button.active { background:var(--panel); border-color:var(--line); color:var(--fg); }
+  main { padding:14px 18px 40px; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; }
+  .filters { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:.4px; }
+  tbody tr:hover { background:var(--panel2); }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; white-space:pre-wrap; word-break:break-word; }
+  .grid td, .grid th { border:1px solid var(--line); }
+  pre.stage { background:#0b0e12; border:1px solid var(--line); border-radius:6px; padding:10px; overflow:auto;
+              max-height:340px; font-size:12px; white-space:pre-wrap; word-break:break-word; }
+  .meta { display:flex; flex-wrap:wrap; gap:12px; margin:8px 0 14px; font-size:12px; color:var(--muted); }
+  .meta b { color:var(--fg); font-weight:600; }
+  .act { font-weight:600; }
+  .act-pseudonymized, .act-allowed { color:var(--ok); }
+  .act-masked { color:var(--warn); }
+  .act-flagged, .act-observed { color:var(--muted); }
+  .act-blocked { color:var(--err); }
+  #detail { margin-top:16px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+  label { font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Lono Console</h1>
+  <span class="badge" id="mode">–</span>
+  <div class="spacer"></div>
+  <div class="auth">
+    <input id="adminkey" type="password" placeholder="admin key" autocomplete="off">
+    <button id="savekey" class="primary">Save</button>
+    <span id="status"></span>
+  </div>
+</header>
+
+<nav>
+  <button data-tab="log" class="active">Filtering log</button>
+  <button data-tab="overrides">Overrides</button>
+  <button data-tab="mappings">Mappings</button>
+  <button data-tab="stats">Stats</button>
+</nav>
+
+<main>
+  <section id="tab-log">
+    <div class="filters">
+      <input id="q" placeholder="search all stages" size="24">
+      <input id="session" placeholder="session id" size="18">
+      <select id="status">
+        <option value="">any status</option>
+        <option>completed</option><option>blocked</option><option>error</option>
+        <option>upstream_error</option><option>client_disconnected</option>
+      </select>
+      <input id="model" placeholder="model" size="14">
+      <button id="refresh" class="primary">Refresh</button>
+      <label><input type="checkbox" id="auto" checked> auto 5s</label>
+    </div>
+    <table id="logTable">
+      <thead><tr><th>time</th><th>status</th><th>mode</th><th>model</th><th>shape</th><th>findings</th>
+        <th>blocked</th><th>tokens</th><th>latency</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="detail"></div>
+  </section>
+
+  <section id="tab-overrides" hidden>
+    <h3>Allow data through temporarily</h3>
+    <p class="mono">A category override lets a whole finding type pass through unchanged (still logged as
+      "allowed"). A value override lets one specific original value pass through for a category.</p>
+    <div class="row">
+      <label>kind <select id="ovKind"><option value="category">category</option><option value="value">value</option></select></label>
+      <input id="ovCategory" placeholder="category e.g. PERSON, EMAIL_ADDRESS, secrets" size="34">
+      <input id="ovValue" placeholder="value (for kind=value)" size="26">
+      <label>minutes <input id="ovMinutes" type="number" min="1" value="60" style="width:80px"></label>
+      <label><input type="checkbox" id="ovPermanent"> permanent</label>
+      <input id="ovNote" placeholder="note" size="20">
+      <button id="ovAdd" class="primary">Add override</button>
+    </div>
+    <table id="ovTable">
+      <thead><tr><th>id</th><th>kind</th><th>category</th><th>value</th><th>expires</th><th>state</th><th>note</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section id="tab-mappings" hidden>
+    <div class="filters">
+      <input id="mapScope" placeholder="scope e.g. session:key-ab12 or global" size="34">
+      <button id="mapLoad" class="primary">Load</button>
+    </div>
+    <table id="mapTable">
+      <thead><tr><th>scope</th><th>category</th><th>original</th><th>pseudonym</th><th>created</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section id="tab-stats" hidden>
+    <button id="statsLoad" class="primary">Refresh</button>
+    <div id="statsBody" class="meta" style="margin-top:12px"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const state = { key: localStorage.getItem("lono.key") || "", tab: "log" };
+const $ = (sel, root = document) => (root || document).querySelector(sel);
+
+function h(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === undefined || v === null) continue;
+    if (k === "class") node.className = v;
+    else if (k === "text") node.textContent = v;
+    else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v);
+  }
+  for (const child of children.flat()) {
+    if (child === undefined || child === null) continue;
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+
+function setStatus(text, isError) {
+  const el = $("#status");
+  el.textContent = text || "";
+  el.className = isError ? "err" : "ok";
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    ...options,
+    headers: { Authorization: "Bearer " + state.key, "Content-Type": "application/json", ...(options.headers || {}) },
+  });
+  if (res.status === 401) throw new Error("Unauthorized - check admin key");
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch (e) { /* ignore */ }
+    throw new Error(detail);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+function pretty(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") {
+    try { return JSON.stringify(JSON.parse(value), null, 2); } catch (e) { return value; }
+  }
+  return JSON.stringify(value, null, 2);
+}
+
+async function loadMode() {
+  try {
+    const info = await (await fetch("/")).json();
+    $("#mode").textContent = info.mode || "unknown";
+  } catch (e) { /* ignore */ }
+}
+
+async function loadLog() {
+  try {
+    const params = new URLSearchParams({ limit: "100" });
+    for (const id of ["q", "session", "status", "model"]) {
+      const value = $("#" + id).value.trim();
+      if (value) params.set(id, value);
+    }
+    const data = await api("/audit/requests?" + params);
+    const tbody = $("#logTable tbody");
+    tbody.replaceChildren();
+    for (const item of data.items) {
+      tbody.append(h("tr", {},
+        h("td", { text: item.created_at }),
+        h("td", { text: item.status }),
+        h("td", { text: item.mode }),
+        h("td", { text: item.model || "" }),
+        h("td", { text: item.api_shape }),
+        h("td", { text: String(item.findings_count) }),
+        h("td", { text: item.blocked ? "yes" : "" }),
+        h("td", { text: item.total_tokens ?? "" }),
+        h("td", { text: item.latency_ms != null ? item.latency_ms + "ms" : "" }),
+        h("td", {}, h("button", { text: "view", onclick: () => loadDetail(item.id) }))));
+    }
+    setStatus(data.total + " records");
+  } catch (e) { setStatus(e.message, true); }
+}
+
+async function loadDetail(id) {
+  try {
+    const r = await api("/audit/requests/" + id);
+    const panel = $("#detail");
+    panel.replaceChildren(h("h3", { text: "Request " + r.id }));
+    const meta = h("div", { class: "meta" });
+    for (const [k, v] of Object.entries({
+      mode: r.mode, status: r.status, model: r.model, session: r.session_id, shape: r.api_shape,
+      tokens: r.total_tokens, cost: r.cost_usd, error: r.error,
+    })) {
+      if (v !== null && v !== undefined && v !== "") meta.append(h("span", {}, h("b", { text: k + ": " }), String(v)));
+    }
+    panel.append(meta);
+
+    const findings = r.findings || [];
+    panel.append(h("h4", { text: "Findings (" + findings.length + ")" }));
+    const tbody = h("tbody");
+    for (const f of findings) {
+      tbody.append(h("tr", {},
+        h("td", { text: f.kind }),
+        h("td", { text: f.detector }),
+        h("td", { class: "act act-" + f.action, text: f.action }),
+        h("td", { text: String(f.score) }),
+        h("td", { class: "mono", text: f.preview || "" }),
+        h("td", {},
+          h("button", { text: "allow category", onclick: () => createOverride({ kind: "category", category: f.kind, minutes: 120, note: "console " + r.id }) }),
+          h("button", { text: "allow value", onclick: () => {
+            const value = prompt("Allow which original value through?\n\n" + (f.preview || ""));
+            if (value) createOverride({ kind: "value", category: f.kind, value, minutes: 120, note: "console " + r.id });
+          } }))));
+    }
+    panel.append(h("table", { class: "grid" },
+      h("thead", {}, h("tr", {}, ...["category", "detector", "action", "score", "preview", "allow"].map((t) => h("th", { text: t })))),
+      tbody));
+
+    for (const [label, value] of [
+      ["1 \u00b7 Client original", r.request_original],
+      ["2 \u00b7 Provider payload (sanitized)", r.request_sanitized],
+      ["3 \u00b7 Provider response (raw)", r.response_raw],
+      ["4 \u00b7 Client response (final)", r.response_final],
+    ]) {
+      panel.append(h("h4", { text: label }));
+      panel.append(h("pre", { class: "stage", text: pretty(value) || "(none)" }));
+    }
+  } catch (e) { setStatus(e.message, true); }
+}
+
+async function createOverride(body) {
+  try {
+    await api("/audit/overrides", { method: "POST", body: JSON.stringify(body) });
+    setStatus("override added - " + body.kind + " " + body.category);
+    if (state.tab === "overrides") loadOverrides();
+  } catch (e) { setStatus(e.message, true); }
+}
+
+async function loadOverrides() {
+  try {
+    const data = await api("/audit/overrides");
+    const tbody = $("#ovTable tbody");
+    tbody.replaceChildren();
+    for (const o of data.items) {
+      tbody.append(h("tr", {},
+        h("td", { text: String(o.id) }),
+        h("td", { text: o.kind }),
+        h("td", { text: o.category }),
+        h("td", { class: "mono", text: o.value_display || "" }),
+        h("td", { text: o.expires_at || "until revoked" }),
+        h("td", { text: o.active ? "active" : "expired" }),
+        h("td", { text: o.note || "" }),
+        h("td", {}, h("button", { text: "revoke", onclick: async () => {
+          try { await api("/audit/overrides/" + o.id, { method: "DELETE" }); loadOverrides(); }
+          catch (e) { setStatus(e.message, true); }
+        } }))));
+    }
+  } catch (e) { setStatus(e.message, true); }
+}
+
+async function loadMappings() {
+  try {
+    const scope = $("#mapScope").value.trim();
+    const data = await api("/audit/mappings" + (scope ? "?scope=" + encodeURIComponent(scope) : ""));
+    const tbody = $("#mapTable tbody");
+    tbody.replaceChildren();
+    for (const m of data.items) {
+      tbody.append(h("tr", {},
+        h("td", { class: "mono", text: m.scope }),
+        h("td", { text: m.entity_type }),
+        h("td", { class: "mono", text: m.original }),
+        h("td", { class: "mono", text: m.pseudonym }),
+        h("td", { text: m.created_at })));
+    }
+    setStatus(data.items.length + " mappings");
+  } catch (e) { setStatus(e.message, true); }
+}
+
+async function loadStats() {
+  try {
+    const s = await api("/audit/stats");
+    const box = $("#statsBody");
+    box.replaceChildren();
+    for (const [k, v] of Object.entries(s)) box.append(h("span", {}, h("b", { text: k + ": " }), String(v ?? "")));
+  } catch (e) { setStatus(e.message, true); }
+}
+
+function showTab(tab) {
+  state.tab = tab;
+  document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  for (const name of ["log", "overrides", "mappings", "stats"]) $("#tab-" + name).hidden = name !== tab;
+  if (tab === "log") loadLog();
+  if (tab === "overrides") loadOverrides();
+  if (tab === "stats") loadStats();
+}
+
+document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+$("#savekey").addEventListener("click", () => {
+  state.key = $("#adminkey").value.trim();
+  localStorage.setItem("lono.key", state.key);
+  setStatus("key saved");
+  showTab(state.tab);
+});
+$("#refresh").addEventListener("click", loadLog);
+$("#statsLoad").addEventListener("click", loadStats);
+$("#mapLoad").addEventListener("click", loadMappings);
+$("#ovAdd").addEventListener("click", () => {
+  const category = $("#ovCategory").value.trim();
+  if (!category) return setStatus("category is required", true);
+  const body = {
+    kind: $("#ovKind").value,
+    category,
+    value: $("#ovValue").value.trim() || null,
+    minutes: parseInt($("#ovMinutes").value, 10) || null,
+    permanent: $("#ovPermanent").checked,
+    note: $("#ovNote").value.trim() || null,
+  };
+  createOverride(body);
+});
+
+$("#adminkey").value = state.key;
+loadMode();
+if (state.key) showTab("log"); else setStatus("enter the admin key to load data");
+setInterval(() => { if (state.tab === "log" && $("#auto").checked && state.key) loadLog(); }, 5000);
+</script>
+</body>
+</html>

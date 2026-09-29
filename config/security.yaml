@@ -32,12 +32,17 @@ detectors:
       ORGANIZATION: pseudonymize
       IP_ADDRESS: pseudonymize
       NRP: pseudonymize
+      STREET_ADDRESS: pseudonymize
+      POSTAL_CODE: pseudonymize
       CREDIT_CARD: mask
       US_SSN: mask
       US_PASSPORT: mask
       US_DRIVER_LICENSE: mask
       MEDICAL_LICENSE: mask
       IBAN_CODE: mask
+      BTC_ADDRESS: mask
+      ETH_ADDRESS: mask
+      MAC_ADDRESS: flag
       DATE_TIME: flag
       URL: flag
 
@@ -53,16 +58,62 @@ detectors:
     allow_schemes: [http, https]
     block_threshold: 0.9
 
+# Watchlist of project codenames, internal terms, and other sensitive strings.
+# Terms come from this inline list and/or watchlist.file.
+watchlist:
+  enabled: true
+  file: ${LONO_CONFIG_DIR:-/config}/watchlist.yaml
+  terms: []
+  # - term: "Project Bluebird"
+  #   category: PROJECT_CODENAME
+  #   replacement_type: PROJECT_CODENAME   # which generator to use for the fake value
+  #   action: pseudonymize                 # pseudonymize | mask | flag | block
+  #   match: word                          # word | substring | regex
+  #   case_sensitive: false
+  # - term: "acme-internal"
+  #   category: INTERNAL_NAME
+  #   action: mask
+
 output_scan:
   enabled: true
   secrets: true
   injection: true
   pii: true
+  watchlist: true
   action: flag # flag | mask (secrets only when mask)
 
 pseudonymization:
   secret: ${LONO_PSEUDONYM_SECRET:-}
   stable_across_sessions: false # true = same entity maps to the same pseudonym everywhere
+  # Per-category replacement lists. Relative paths resolve against lists_dir;
+  # use "builtin" to force the shipped Python defaults. Inline pools win.
+  #
+  # The entries below are the categories that are list-backed by default.
+  # You may add ANY other category name (e.g. PHONE_NUMBER, CUSTOMER_ID) and
+  # point it at your own file; that becomes a literal pool and overrides the
+  # generator for that category. See README "Which categories are list-backed
+  # vs generated".
+  lists_dir: ${LONO_CONFIG_DIR:-/config}/lists
+  lists:
+    first_names: first_names.txt
+    last_names: last_names.txt
+    cities: cities.txt
+    companies: companies.txt
+    domain_words: domain_words.txt
+    nationalities: nationalities.txt
+    street_names: street_names.txt
+    street_suffixes: street_suffixes.txt
+    # PHONE_NUMBER: phone_numbers.txt
+    # CUSTOMER_ID: customer_ids.txt
+  pools: {} # inline overrides, e.g. { first_names: [Alice, Bob] }
+
+# Runtime allow-through controls, managed from the console (/ui) or the
+# /audit/overrides API. Expired/revoked overrides are ignored.
+overrides:
+  enabled: true
+  cache_seconds: 3
+  default_max_minutes: 60
+  allow_permanent: true
 
 audit:
   enabled: true

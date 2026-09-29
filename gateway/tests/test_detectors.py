@@ -67,3 +67,27 @@ def test_url_checks() -> None:
     kinds = {detection.kind for detection in detector.scan(text)}
     assert "URL_PRIVATE_HOST" in kinds
     assert "URL_DISALLOWED_SCHEME" in kinds
+
+
+def test_extended_secret_patterns() -> None:
+    detector = SecretDetector(SecretsConfig())
+    text = " ".join(
+        [
+            "dop_v1_" + "a" * 64,
+            "shpat_" + "b" * 32,
+            "SG." + "c" * 22 + "." + "d" * 43,
+            "npm_" + "e" * 36,
+        ]
+    )
+    kinds = {detection.kind for detection in detector.scan(text)}
+    assert {"DIGITALOCEAN_TOKEN", "SHOPIFY_TOKEN", "SENDGRID_KEY", "NPM_TOKEN"} <= kinds
+
+
+async def test_pii_street_postal_and_crypto() -> None:
+    detector = PiiDetector(PiiConfig(engine="regex"), fail_closed=False)
+    text = "ship to 1600 Pennsylvania Avenue NW, CA 90210, wallet bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"
+    kinds = {detection.kind for detection in await detector.scan(text)}
+    assert "STREET_ADDRESS" in kinds
+    assert "POSTAL_CODE" in kinds
+    assert "BTC_ADDRESS" in kinds
+    await detector.aclose()

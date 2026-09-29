@@ -54,6 +54,24 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str], float]] = [
         re.compile(r"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^\s:@/]+:[^\s@/]+@\S+"),
         0.95,
     ),
+    ("AZURE_STORAGE_KEY", re.compile(r"(?i)\bAccountKey=([A-Za-z0-9+/=]{60,})"), 0.95),
+    ("NPM_TOKEN", re.compile(r"\bnpm_[A-Za-z0-9]{36}\b"), 0.9),
+    ("PYPI_TOKEN", re.compile(r"\bpypi-[A-Za-z0-9_\-]{40,}\b"), 0.9),
+    ("DIGITALOCEAN_TOKEN", re.compile(r"\bdop_v1_[a-f0-9]{64}\b"), 0.95),
+    ("SHOPIFY_TOKEN", re.compile(r"\bshpat_[a-f0-9]{32}\b"), 0.95),
+    ("TWILIO_API_KEY", re.compile(r"\bSK[0-9a-fA-F]{32}\b"), 0.9),
+    ("SENDGRID_KEY", re.compile(r"\bSG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}\b"), 0.95),
+    ("MAILGUN_KEY", re.compile(r"\bkey-[a-f0-9]{32}\b"), 0.85),
+    ("HEROKU_API_KEY", re.compile(r"(?i)heroku[_-]?api[_-]?key\s*[:=]\s*['\"]?([0-9a-f-]{36})"), 0.85),
+    (
+        "DISCORD_TOKEN",
+        re.compile(r"\b[MN][A-Za-z0-9]{23}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27,}\b"),
+        0.9,
+    ),
+    ("TELEGRAM_BOT_TOKEN", re.compile(r"\b\d{8,10}:[A-Za-z0-9_\-]{35}\b"), 0.85),
+    ("FACEBOOK_ACCESS_TOKEN", re.compile(r"\bEAA[A-Za-z0-9]{20,}\b"), 0.85),
+    ("SAS_TOKEN", re.compile(r"(?i)\bsig=[A-Za-z0-9%+/=]{20,}"), 0.85),
+    ("BASIC_AUTH", re.compile(r"(?i)\bauthorization\s*:\s*basic\s+([A-Za-z0-9+/=]{8,})"), 0.85),
 ]
 
 _ENTROPY_TOKEN_RE = re.compile(r"[A-Za-z0-9+/=_\-]{20,}")

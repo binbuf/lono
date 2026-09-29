@@ -1,0 +1,34 @@
+# Lono replacement list for category: cities
+# One value per line. Blank lines and # comments are ignored.
+# Swap this file or point pseudonymization.lists at your own.
+
+Springfield
+Riverton
+Fairview
+Lakeside
+Brookfield
+Cedar Falls
+Greenville
+Ashland
+Madison
+Clayton
+Dover
+Elmwood
+Franklin
+Georgetown
+Hampton
+Kingsport
+Lexington
+Milton
+Newport
+Oakdale
+Portsmouth
+Rockford
+Salem
+Trenton
+Utica
+Vienna
+Winchester
+Yorktown
+Bristol
+Coventry

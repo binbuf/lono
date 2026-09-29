@@ -1,0 +1,31 @@
+# Lono watchlist: project codenames, internal terms, other sensitive strings.
+#
+# Each entry:
+#   term:              exact text, substring, or regex depending on `match`
+#   category:          finding kind shown in the console
+#   replacement_type:  optional generator to use for the fake value
+#                      (e.g. PERSON, ORGANIZATION, PROJECT_CODENAME)
+#   action:            pseudonymize | mask | flag | block
+#                      block applies only in `enforce` mode
+#   match:             word | substring | regex
+#   case_sensitive:    default false
+#
+# Terms can also be declared inline under `watchlist.terms` in security.yaml.
+
+terms: []
+#  - term: "Project Bluebird"
+#    category: PROJECT_CODENAME
+#    replacement_type: PROJECT_CODENAME
+#    action: pseudonymize
+#    match: word
+#
+#  - term: "acme-internal"
+#    category: INTERNAL_NAME
+#    action: mask
+#    match: substring
+#
+#  - term: '\bCUST-\d{6}\b'
+#    category: CUSTOMER_ID
+#    replacement_type: CUSTOMER_ID
+#    action: pseudonymize
+#    match: regex

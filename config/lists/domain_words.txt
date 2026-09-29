@@ -1,0 +1,30 @@
+# Lono replacement list for category: domain_words
+# One value per line. Blank lines and # comments are ignored.
+# Swap this file or point pseudonymization.lists at your own.
+
+aurora
+basalt
+cobalt
+delta
+ember
+fjord
+granite
+harbor
+indigo
+juniper
+kestrel
+lantern
+meridian
+nimbus
+onyx
+prairie
+quarry
+ridge
+summit
+tundra
+umbra
+vertex
+willow
+xenon
+yarrow
+zephyr

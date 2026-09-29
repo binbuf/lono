@@ -1,0 +1,29 @@
+# Lono replacement list for category: companies
+# One value per line. Blank lines and # comments are ignored.
+# Swap this file or point pseudonymization.lists at your own.
+
+Acme Corp
+Globex
+Initech
+Umbrella Systems
+Northwind Traders
+Contoso
+Fabrikam
+Litware
+Proseware
+Wide World Importers
+Adventure Works
+Blue Yonder
+Coho Vineyard
+Lucerne Publishing
+Margie Travel
+Nod Publishers
+Relecloud
+Southridge Video
+Tailspin Toys
+Trey Research
+VanArsdel
+Wingtip Toys
+Alpine Ski House
+City Power & Light
+Consolidated Messenger

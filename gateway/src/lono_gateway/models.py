@@ -9,7 +9,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 Mode = Literal["observe", "sanitize", "enforce"]
-FindingAction = Literal["observed", "flagged", "masked", "pseudonymized", "blocked", "ignored", "stripped"]
+FindingAction = Literal[
+    "observed", "flagged", "masked", "pseudonymized", "blocked", "ignored", "stripped", "allowed"
+]
 Shape = Literal["openai.chat", "openai.completions", "openai.responses", "anthropic.messages", "passthrough"]
 
 

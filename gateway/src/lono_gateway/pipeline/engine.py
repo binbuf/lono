@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -11,8 +12,17 @@ from lono_gateway.detectors import DetectorUnavailable
 from lono_gateway.detectors.injection import InjectionDetector
 from lono_gateway.detectors.pii import PiiDetector
 from lono_gateway.detectors.secrets import SecretDetector
+from lono_gateway.detectors.terms import WatchlistDetector
 from lono_gateway.detectors.urls import UrlDetector
-from lono_gateway.models import Detection, Finding, RequestContext, preview_span, resolve_overlaps
+from lono_gateway.lists import build_pools
+from lono_gateway.models import (
+    Detection,
+    Finding,
+    RequestContext,
+    normalize_key,
+    preview_span,
+    resolve_overlaps,
+)
 from lono_gateway.pipeline.shapes import REQUEST_WALKERS, RESPONSE_WALKERS
 from lono_gateway.pipeline.types import ResponseOutcome, TextResult
 from lono_gateway.pseudonymizer import Pseudonymizer, ResolvedDetection
@@ -20,6 +30,12 @@ from lono_gateway.rehydrator import Rehydrator, load_rehydrator
 from lono_gateway.settings import SecurityConfig
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _ActiveOverrides:
+    categories: set[str] = field(default_factory=set)
+    values: dict[str, set[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -53,9 +69,45 @@ class SecurityPipeline:
         self.pii = PiiDetector(cfg.detectors.pii, cfg.fail_closed)
         self.injection = InjectionDetector(cfg.detectors.injection)
         self.urls = UrlDetector(cfg.detectors.urls)
+        self.watchlist = WatchlistDetector(cfg.watchlist)
+        self.pools = build_pools(cfg.pseudonymization)
+        self._overrides = _ActiveOverrides()
+        self._overrides_loaded_at = 0.0
 
     async def aclose(self) -> None:
         await self.pii.aclose()
+
+    def _active_overrides(self) -> _ActiveOverrides:
+        if not self.cfg.overrides.enabled:
+            return _ActiveOverrides()
+        now = time.monotonic()
+        if now - self._overrides_loaded_at < self.cfg.overrides.cache_seconds:
+            return self._overrides
+        data = self.store.active_overrides()
+        self._overrides = _ActiveOverrides(
+            categories=set(data.get("categories") or set()),
+            values={key: set(value) for key, value in (data.get("values") or {}).items()},
+        )
+        self._overrides_loaded_at = now
+        return self._overrides
+
+    def invalidate_overrides(self) -> None:
+        self._overrides_loaded_at = 0.0
+
+    def _override_allowed(self, detection: Detection, span_value: str) -> bool:
+        active = self._active_overrides()
+        if not active.categories and not active.values:
+            return False
+        tokens = {detection.kind, detection.detector, f"{detection.detector}:{detection.kind}"}
+        if tokens & active.categories:
+            return True
+        if not span_value:
+            return False
+        key = normalize_key(span_value)
+        for token in tokens:
+            if key in active.values.get(token, ()) or key in active.values.get("*", ()):
+                return True
+        return False
 
     # ------------------------------------------------------------------ input
 
@@ -83,14 +135,20 @@ class SecurityPipeline:
 
         resolved: list[ResolvedDetection] = []
         for detection in detections:
-            action = "observed" if ctx.mode == "observe" else self._action_for(detection, ctx)
-            if flag_only and action not in {"observed"}:
+            span_value = text[detection.start : detection.end]
+            if ctx.mode == "observe":
+                action = "observed"
+            elif self._override_allowed(detection, span_value):
+                action = "allow"
+            else:
+                action = self._action_for(detection, ctx)
+            if flag_only and action not in {"observed", "allow"}:
                 action = "flag"
             resolved.append(ResolvedDetection(detection=detection, action=action))
 
         self._promote_injection_aggregate(resolved, ctx)
 
-        pseudonymizer = Pseudonymizer(self.store, self.cfg.pseudonymization, ctx.session_id)
+        pseudonymizer = Pseudonymizer(self.store, self.cfg.pseudonymization, ctx.session_id, self.pools)
         substituted = pseudonymizer.substitute(text, resolved)
         return TextResult(
             text=substituted.text,
@@ -110,6 +168,7 @@ class SecurityPipeline:
             detections.extend(self.urls.scan(text))
         if use_injection:
             detections.extend(self.injection.scan(text))
+        detections.extend(self.watchlist.scan(text))
         return resolve_overlaps(detections)
 
     def _action_for(self, detection: Detection, ctx: RequestContext) -> str:
@@ -119,6 +178,10 @@ class SecurityPipeline:
             return self.cfg.detectors.pii.actions.get(
                 detection.kind, self.cfg.detectors.pii.default_action
             )
+        if detection.detector == "watchlist":
+            if detection.suggested == "block":
+                return "block" if ctx.mode == "enforce" else "flag"
+            return detection.suggested
         if detection.detector == "injection":
             cfg = self.cfg.detectors.injection
             if ctx.mode == "enforce" and cfg.action == "block" and detection.score >= cfg.block_threshold:
@@ -188,9 +251,9 @@ class SecurityPipeline:
             if ctx.mode == "observe" and cfg.enabled:
                 detections = await self._collect_output(text, cfg)
                 resolved = [ResolvedDetection(det, "observed") for det in detections]
-                substituted = Pseudonymizer(self.store, self.cfg.pseudonymization, ctx.session_id).substitute(
-                    text, resolved
-                )
+                substituted = Pseudonymizer(
+                    self.store, self.cfg.pseudonymization, ctx.session_id, self.pools
+                ).substitute(text, resolved)
                 return TextResult(
                     text=rehydrator.rehydrate(text),
                     findings=substituted.findings,
@@ -206,7 +269,7 @@ class SecurityPipeline:
             else:
                 action = "flag"
             resolved.append(ResolvedDetection(detection=detection, action=action))
-        substituted = Pseudonymizer(self.store, self.cfg.pseudonymization, ctx.session_id).substitute(
+        substituted = Pseudonymizer(self.store, self.cfg.pseudonymization, ctx.session_id, self.pools).substitute(
             text, resolved
         )
         return TextResult(text=rehydrator.rehydrate(substituted.text), findings=substituted.findings)
@@ -219,6 +282,8 @@ class SecurityPipeline:
             detections.extend(await self.pii.scan(text))
         if cfg.injection:
             detections.extend(self.injection.scan(text))
+        if getattr(cfg, "watchlist", True):
+            detections.extend(self.watchlist.scan(text))
         return resolve_overlaps(detections)
 
     async def scan_text_findings(

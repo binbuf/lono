@@ -35,12 +35,18 @@ class Pseudonymizer:
     gateway can rehydrate provider responses now or after a restart.
     """
 
-    def __init__(self, store, cfg: PseudonymizationConfig, session_id: str) -> None:
+    def __init__(
+        self,
+        store,
+        cfg: PseudonymizationConfig,
+        session_id: str,
+        pools: Pools | None = None,
+    ) -> None:
         self.store = store
         self.cfg = cfg
         self.session_id = session_id
         self.scope = "global" if cfg.stable_across_sessions else f"session:{session_id}"
-        self.pools = Pools.from_config(cfg.pools)
+        self.pools = pools or Pools()
         self._cache: dict[tuple[str, str], str] = {}
 
     def substitute(self, text: str, resolved: list[ResolvedDetection]) -> SubstituteResult:
@@ -90,6 +96,7 @@ class Pseudonymizer:
                 "strip": "stripped",
                 "block": "blocked",
                 "observed": "observed",
+                "allow": "allowed",
             }.get(action, "flagged")
             findings.append(
                 Finding(

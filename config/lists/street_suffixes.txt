@@ -1,0 +1,17 @@
+# Lono replacement list for category: street_suffixes
+# One value per line. Blank lines and # comments are ignored.
+# Swap this file or point pseudonymization.lists at your own.
+
+Street
+Avenue
+Road
+Boulevard
+Lane
+Drive
+Court
+Way
+Place
+Terrace
+Circle
+Trail
+Parkway
