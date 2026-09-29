@@ -77,7 +77,10 @@ services:
       LANGFUSE_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY:?set LANGFUSE_INIT_PROJECT_SECRET_KEY in .env}
     volumes:
       - ./config:/config:ro
-      - ./data/gateway:/data
+      # Keep the SQLite audit DB on a Linux-native named volume: a Windows
+      # bind mount goes through Docker Desktop's 9p filesystem, which stalls
+      # the gateway event loop on every commit once the DB grows.
+      - lono_gateway_data:/data
     depends_on:
       litellm:
         condition: service_healthy
@@ -229,6 +232,7 @@ services:
       retries: 10
 
 volumes:
+  lono_gateway_data:
   lono_postgres_data:
   lono_clickhouse_data:
   lono_clickhouse_logs:
