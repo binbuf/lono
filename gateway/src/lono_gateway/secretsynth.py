@@ -7,8 +7,10 @@ the shape of the original (prefix, length, character classes) so the provider
 cannot tell a request was redacted and downstream tooling keeps working.
 
 The synthetic value is deterministic for a given seed (session/key) so the same
-secret maps to the same fake within a conversation, and is deliberately **not**
-reversible: it is never rehydrated back into a response.
+secret maps to the same fake within a conversation. Because each fake is unique
+to its original, the pseudonymizer records a reversible mapping for masked
+secrets: the provider only ever sees the fake, but the gateway restores the real
+credential in the response the client receives.
 """
 
 from __future__ import annotations

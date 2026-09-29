@@ -42,7 +42,7 @@ def test_deterministic_across_instances_and_scoped_by_session(tmp_path) -> None:
     store.close()
 
 
-def test_mask_action_is_irreversible(tmp_path) -> None:
+def test_secret_mask_is_reversible(tmp_path) -> None:
     store = AuditStore(str(tmp_path / "audit.db"))
     cfg = PseudonymizationConfig(secret="s3cret")
     text = "password=hunter2secret"
@@ -56,6 +56,22 @@ def test_mask_action_is_irreversible(tmp_path) -> None:
     assert len(masked) == len(original)
     assert result.findings[0].action == "masked"
     assert result.findings[0].before == original
+    assert result.mappings
+    # The provider only saw the fake; the client gets the original back.
+    rehydrator = load_rehydrator(store, "s")
+    assert rehydrator.rehydrate(result.text) == text
+    store.close()
+
+
+def test_generic_mask_is_irreversible(tmp_path) -> None:
+    store = AuditStore(str(tmp_path / "audit.db"))
+    cfg = PseudonymizationConfig(secret="s3cret")
+    text = "email steve@mycompany.com"
+    detection = Detection(
+        detector="pii.regex", kind="EMAIL_ADDRESS", start=6, end=len(text), score=0.9, suggested="mask"
+    )
+    result = Pseudonymizer(store, cfg, "s").substitute(text, [ResolvedDetection(detection, "mask")])
+    assert result.text == "email [REDACTED:EMAIL_ADDRESS]"
     assert not result.mappings
     store.close()
 

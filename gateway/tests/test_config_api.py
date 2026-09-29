@@ -114,6 +114,34 @@ def test_secret_rule_masks_custom_key(client, upstream) -> None:
     assert client.delete(f"/audit/secret-rules/{rule_id}", headers=ADMIN).status_code == 404
 
 
+def test_masked_secret_round_trips_to_client(client, upstream) -> None:
+    real = "rpa_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0u1"
+
+    def responder(request, parsed):
+        content = parsed["messages"][0]["content"]
+        # The provider must never see the real credential.
+        assert real not in content
+        return httpx.Response(
+            200,
+            json={
+                "id": "x",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}
+                ],
+            },
+        )
+
+    upstream.responder = responder
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "x", "messages": [{"role": "user", "content": f"use {real}"}]},
+        headers={"authorization": "Bearer x"},
+    )
+    assert response.status_code == 200
+    # ...but the client gets its own key back in the response.
+    assert real in response.json()["choices"][0]["message"]["content"]
+
+
 def test_secret_rule_rejects_invalid_regex(client) -> None:
     response = client.post(
         "/audit/secret-rules",

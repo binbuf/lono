@@ -89,9 +89,30 @@ class Pseudonymizer:
             elif action == "mask":
                 if det.detector == "secrets":
                     # Send a plausible but fake value; the provider must not be
-                    # able to tell the request was redacted.
+                    # able to tell the request was redacted. The fake is unique
+                    # per value, so unlike the generic [REDACTED:…] placeholder
+                    # it can be reversibly mapped: the client gets its real
+                    # credential back in the response, while the provider only
+                    # ever saw the fake.
                     replacement = self._fake_secret(det.kind, original)
                     remember_synthetic(replacement)
+                    key = normalize_key(original)
+                    self.store.put_mapping(
+                        scope=self.scope,
+                        entity_type=det.kind,
+                        original_key=key,
+                        original=original,
+                        pseudonym=replacement,
+                    )
+                    mappings.append(
+                        MappingRecord(
+                            scope=self.scope,
+                            entity_type=det.kind,
+                            original_key=key,
+                            original=original,
+                            pseudonym=replacement,
+                        )
+                    )
                 else:
                     replacement = f"[REDACTED:{det.kind}]"
                 parts.append(replacement)
