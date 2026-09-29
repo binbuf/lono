@@ -15,11 +15,16 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "mappings", label: "Mappings" },
 ];
 
+function tabFromHash(): Tab {
+  const raw = window.location.hash.replace(/^#\/?/, "");
+  return TABS.some((t) => t.id === raw) ? (raw as Tab) : "log";
+}
+
 export default function App() {
   const [key, setKey] = useState(() => localStorage.getItem("lono.key") || "");
   const [draftKey, setDraftKey] = useState(key);
   const [mode, setMode] = useState("…");
-  const [tab, setTab] = useState<Tab>("log");
+  const [tab, setTab] = useState<Tab>(tabFromHash);
   const [statusMsg, setStatusMsg] = useState("");
   const [statusErr, setStatusErr] = useState(false);
   const [inspectId, setInspectId] = useState<string | null>(null);
@@ -34,6 +39,17 @@ export default function App() {
   useEffect(() => {
     getMode().then(setMode);
   }, []);
+
+  useEffect(() => {
+    const onHash = () => setTab(tabFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  useEffect(() => {
+    const desired = "#" + tab;
+    if (window.location.hash !== desired) window.location.hash = desired;
+  }, [tab]);
 
   useEffect(() => {
     if (!key) status("enter the admin key to load data");

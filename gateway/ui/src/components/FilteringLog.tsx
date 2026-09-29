@@ -26,8 +26,11 @@ function columnText(item: RequestSummary, col: ColumnId): string {
       return item.session_id || "";
     case "status":
       return (item.status || "") + (item.blocked ? " blocked" : "");
-    case "changes":
-      return (item.changes || []).map((c) => [c.kind, c.before, c.after].filter(Boolean).join(" ")).join(" ");
+    case "changes": {
+      const changes = item.changes || [];
+      if (!changes.length && item.changes_count <= 0) return "No Changes";
+      return changes.map((c) => [c.kind, c.before, c.after].filter(Boolean).join(" ")).join(" ");
+    }
   }
 }
 
@@ -45,6 +48,7 @@ export function FilteringLog({
   const [query, setQuery] = useState("");
   const [auto, setAuto] = useState(true);
   const [revealAll, setRevealAll] = useState(false);
+  const [onlyChanged, setOnlyChanged] = useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
@@ -72,11 +76,13 @@ export function FilteringLog({
     return () => clearInterval(timer);
   }, [auto, load]);
 
-  const filtered = items.filter((item) =>
-    (COLUMNS as readonly { id: ColumnId }[]).every((col) => {
-      const needle = (filters[col.id] || "").trim().toLowerCase();
-      return !needle || columnText(item, col.id).toLowerCase().includes(needle);
-    }),
+  const filtered = items.filter(
+    (item) =>
+      (!onlyChanged || item.changes_count > 0 || (item.changes || []).length > 0) &&
+      (COLUMNS as readonly { id: ColumnId }[]).every((col) => {
+        const needle = (filters[col.id] || "").trim().toLowerCase();
+        return !needle || columnText(item, col.id).toLowerCase().includes(needle);
+      }),
   );
 
   const setFilter = (col: ColumnId, value: string) => setFilters((f) => ({ ...f, [col]: value }));
@@ -101,6 +107,14 @@ export function FilteringLog({
         </label>
         <label className="muted row" style={{ gap: 6 }}>
           <input type="checkbox" checked={revealAll} onChange={(e) => setRevealAll(e.target.checked)} /> reveal values
+        </label>
+        <label className="muted row" style={{ gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={onlyChanged}
+            onChange={(e) => setOnlyChanged(e.target.checked)}
+          />{" "}
+          only changed
         </label>
         <button className="ghost" onClick={() => setFilters({})}>
           Clear filters
@@ -197,7 +211,9 @@ export function FilteringLog({
                           view all {item.changes_count} changes
                         </button>
                       )}
-                      {!changes.length && <span className="muted">—</span>}
+                      {!changes.length && (
+                        <span className="muted">No Changes</span>
+                      )}
                     </div>
                   </td>
                   <td className="actions">
