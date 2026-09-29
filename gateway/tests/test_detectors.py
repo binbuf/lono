@@ -117,7 +117,7 @@ def test_plausible_entity_rejects_code_tokens() -> None:
         ("PERSON", "opencode"),
         ("PERSON", "LITELLM_MASTER_KEY"),
         ("PERSON", "claude-sonnet-4-6"),
-        ("PERSON", r"C:\Users\dan\.config\opencode"),
+        ("PERSON", r"C:\Users\youruser\.config\opencode"),
         ("LOCATION", "JSON"),
         ("LOCATION", "httpx"),
         ("LOCATION", "modelID"),

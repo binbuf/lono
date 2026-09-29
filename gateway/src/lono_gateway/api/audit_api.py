@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from lono_gateway.models import normalize_key
 
@@ -168,6 +168,142 @@ def revoke_override(request: Request, override_id: int, _: None = Depends(requir
     if not revoked:
         raise HTTPException(status_code=404, detail="override not found or already revoked")
     return {"revoked": True, "id": override_id}
+
+
+# ----------------------------------------------------------------- config
+
+
+@router.get("/config")
+def get_config(request: Request, _: None = Depends(require_admin)) -> dict[str, Any]:
+    """The live, secret-redacted configuration."""
+    return request.app.state.config_manager.snapshot()
+
+
+@router.patch("/config")
+def patch_config(
+    request: Request, body: Annotated[dict[str, Any], Body()], _: None = Depends(require_admin)
+) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="config patch must be an object")
+    try:
+        return request.app.state.config_manager.update(body)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
+
+@router.get("/upstreams")
+def list_upstreams(request: Request, _: None = Depends(require_admin)) -> dict[str, Any]:
+    registry = request.app.state.upstreams
+    cfg = request.app.state.settings
+    return {
+        "active": registry.names(),
+        "default": cfg.upstream.name,
+        "items": [upstream.model_dump(mode="json") for upstream in cfg.all_upstreams()],
+    }
+
+
+# ----------------------------------------------------------- substitutions
+
+
+class SubstitutionRequest(BaseModel):
+    id: str | None = None
+    pattern: str = Field(min_length=1)
+    replacement: str
+    match: Literal["word", "substring", "regex"] = "substring"
+    case_sensitive: bool = False
+    category: str = "SUBSTITUTION"
+    enabled: bool = True
+    note: str = ""
+
+
+@router.get("/substitutions")
+def list_substitutions(request: Request, _: None = Depends(require_admin)) -> dict[str, Any]:
+    return {"items": request.app.state.config_manager.list_substitutions()}
+
+
+@router.post("/substitutions")
+def create_substitution(
+    request: Request, body: SubstitutionRequest, _: None = Depends(require_admin)
+) -> dict[str, Any]:
+    try:
+        return request.app.state.config_manager.add_substitution(body.model_dump(exclude_none=True))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
+
+@router.delete("/substitutions/{substitution_id}")
+def delete_substitution(
+    request: Request, substitution_id: str, _: None = Depends(require_admin)
+) -> dict[str, Any]:
+    if not request.app.state.config_manager.remove_substitution(substitution_id):
+        raise HTTPException(status_code=404, detail="substitution not found")
+    return {"deleted": True, "id": substitution_id}
+
+
+# ------------------------------------------------------------------- tools
+
+
+@router.get("/tools")
+def list_tools(
+    request: Request,
+    q: str | None = None,
+    session_id: str | None = None,
+    request_id: str | None = None,
+    tool: str | None = None,
+    only_commands: bool = False,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    return request.app.state.store.list_tool_events(
+        query=q,
+        session_id=session_id,
+        request_id=request_id,
+        tool=tool,
+        only_commands=only_commands,
+        since=since,
+        until=until,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/tools/stats")
+def tools_stats(
+    request: Request, hours: int = Query(default=24, ge=1, le=24 * 30), _: None = Depends(require_admin)
+) -> dict[str, Any]:
+    return request.app.state.store.tool_stats(hours)
+
+
+@router.get("/mcp")
+def list_mcp(
+    request: Request,
+    q: str | None = None,
+    session_id: str | None = None,
+    request_id: str | None = None,
+    server: str | None = None,
+    method: str | None = None,
+    errors_only: bool = False,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    return request.app.state.store.list_mcp_events(
+        query=q,
+        session_id=session_id,
+        request_id=request_id,
+        server=server,
+        method=method,
+        errors_only=errors_only,
+        since=since,
+        until=until,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/media/{sha256}")

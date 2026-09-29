@@ -72,7 +72,10 @@ class Pseudonymizer:
                 block_kinds.append(det.kind)
                 parts.append(original)
             elif action == "pseudonymize":
-                replacement = self._get_or_create(det.kind, original)
+                if det.replacement:
+                    replacement = self._register_explicit(det.kind, original, det.replacement)
+                else:
+                    replacement = self._get_or_create(det.kind, original)
                 parts.append(replacement)
                 mappings.append(
                     MappingRecord(
@@ -139,6 +142,31 @@ class Pseudonymizer:
         fake = generate_fake_secret(entity_type, original, rng)
         self._cache[cache_key] = fake
         return fake
+
+    def _register_explicit(self, entity_type: str, original: str, replacement: str) -> str:
+        """Persist a caller-chosen replacement and return it.
+
+        The mapping is stored like any other pseudonym so provider responses
+        that echo the replacement are rehydrated to the original span.
+        """
+        key = normalize_key(original)
+        cache_key = (entity_type, key)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+        row = self.store.get_mapping(self.scope, entity_type, key)
+        if row is not None:
+            pseudonym = row["pseudonym"]
+        else:
+            pseudonym = replacement
+            self.store.put_mapping(
+                scope=self.scope,
+                entity_type=entity_type,
+                original_key=key,
+                original=original,
+                pseudonym=pseudonym,
+            )
+        self._cache[cache_key] = pseudonym
+        return pseudonym
 
     def _get_or_create(self, entity_type: str, original: str) -> str:
         key = normalize_key(original)

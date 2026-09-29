@@ -12,6 +12,7 @@ from lono_gateway.detectors import DetectorUnavailable
 from lono_gateway.detectors.injection import InjectionDetector
 from lono_gateway.detectors.pii import PiiDetector
 from lono_gateway.detectors.secrets import SecretDetector
+from lono_gateway.detectors.substitutions import SubstitutionDetector
 from lono_gateway.detectors.terms import WatchlistDetector
 from lono_gateway.detectors.urls import UrlDetector
 from lono_gateway.lists import build_pools
@@ -70,12 +71,24 @@ class SecurityPipeline:
         self.injection = InjectionDetector(cfg.detectors.injection)
         self.urls = UrlDetector(cfg.detectors.urls)
         self.watchlist = WatchlistDetector(cfg.watchlist)
+        self.substitutions = SubstitutionDetector(cfg.substitutions)
         self.pools = build_pools(cfg.pseudonymization)
         self._overrides = _ActiveOverrides()
         self._overrides_loaded_at = 0.0
 
     async def aclose(self) -> None:
         await self.pii.aclose()
+
+    def reload(self) -> None:
+        """Rebuild detectors that compile config at construction time.
+
+        Scalar detector settings are read live from ``cfg``; only detectors that
+        precompile patterns (watchlist, substitutions) and the replacement pools
+        need an explicit rebuild after a runtime config change.
+        """
+        self.watchlist = WatchlistDetector(self.cfg.watchlist)
+        self.substitutions = SubstitutionDetector(self.cfg.substitutions)
+        self.pools = build_pools(self.cfg.pseudonymization)
 
     def _active_overrides(self) -> _ActiveOverrides:
         if not self.cfg.overrides.enabled:
@@ -178,6 +191,7 @@ class SecurityPipeline:
         if use_injection:
             detections.extend(self.injection.scan(text))
         detections.extend(self.watchlist.scan(text))
+        detections.extend(self.substitutions.scan(text))
         return resolve_overlaps(detections)
 
     def _action_for(self, detection: Detection, ctx: RequestContext) -> str:
@@ -194,6 +208,8 @@ class SecurityPipeline:
             if detection.suggested == "block":
                 return "block" if ctx.mode == "enforce" else "flag"
             return detection.suggested
+        if detection.detector == "substitution":
+            return detection.suggested or "pseudonymize"
         if detection.detector == "injection":
             cfg = self.cfg.detectors.injection
             if ctx.mode == "enforce" and cfg.action == "block" and detection.score >= cfg.block_threshold:

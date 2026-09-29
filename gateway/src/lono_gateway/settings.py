@@ -98,12 +98,67 @@ class WatchTerm(BaseModel):
     match: Literal["word", "substring", "regex"] = "word"
     case_sensitive: bool = False
     replacement_type: str = ""
+    # When set, the finding is replaced with this literal value (still recorded
+    # as a mapping, so provider output is rehydrated back to the original).
+    replacement: str = ""
 
 
 class WatchlistConfig(BaseModel):
     enabled: bool = True
     file: str = "${LONO_CONFIG_DIR:-/config}/watchlist.yaml"
     terms: list[WatchTerm] = Field(default_factory=list)
+
+
+class Substitution(BaseModel):
+    """A literal keyword swap (e.g. a GitHub username or a home path)."""
+
+    id: str = ""
+    pattern: str
+    replacement: str
+    match: Literal["word", "substring", "regex"] = "substring"
+    case_sensitive: bool = False
+    category: str = "SUBSTITUTION"
+    enabled: bool = True
+    note: str = ""
+
+
+class SubstitutionsConfig(BaseModel):
+    enabled: bool = True
+    terms: list[Substitution] = Field(default_factory=list)
+
+
+class McpServerConfig(BaseModel):
+    name: str
+    url: str
+    enabled: bool = True
+    headers: dict[str, str] = Field(default_factory=dict)
+    description: str = ""
+
+
+class McpConfig(BaseModel):
+    enabled: bool = True
+    timeout_s: float = 120.0
+    servers: list[McpServerConfig] = Field(default_factory=list)
+
+
+class ToolsConfig(BaseModel):
+    enabled: bool = True
+    extract_commands: bool = True
+    command_tools: list[str] = Field(
+        default_factory=lambda: [
+            "bash",
+            "shell",
+            "sh",
+            "run_command",
+            "execute_command",
+            "terminal",
+            "exec",
+            "run_shell_command",
+            "command",
+        ]
+    )
+    max_events_per_request: int = 200
+    preview_chars: int = 2000
 
 
 class OutputScanConfig(BaseModel):
@@ -173,10 +228,25 @@ class AuditConfig(BaseModel):
 
 
 class UpstreamConfig(BaseModel):
+    """A provider proxy the gateway can forward to concurrently.
+
+    The top-level ``upstream`` is the default route; entries in ``upstreams``
+    are additional named proxies. Selection is by the ``x-lono-upstream``
+    request header, then a model match, then a path prefix, then the default.
+    """
+
+    name: str = "default"
     base_url: str = "http://litellm:4000"
+    enabled: bool = True
+    description: str = ""
     timeout_s: float = 900.0
     connect_timeout_s: float = 10.0
     max_body_bytes: int = 50_000_000
+    # fnmatch patterns matched against the request ``model`` (e.g. "deepseek-*",
+    # "openai/*", "claude-*").
+    models: list[str] = Field(default_factory=list)
+    # Route requests whose URL path starts with one of these prefixes.
+    path_prefixes: list[str] = Field(default_factory=list)
     forward_headers: list[str] = Field(
         default_factory=lambda: [
             "authorization",
@@ -188,6 +258,11 @@ class UpstreamConfig(BaseModel):
             "accept",
         ]
     )
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _default_name(cls, value: object) -> object:
+        return "default" if value is None or value == "" else value
 
 
 class AuthConfig(BaseModel):
@@ -204,17 +279,35 @@ class SecurityConfig(BaseModel):
     inspect_tools: bool = True
     detectors: DetectorsConfig = Field(default_factory=DetectorsConfig)
     watchlist: WatchlistConfig = Field(default_factory=WatchlistConfig)
+    substitutions: SubstitutionsConfig = Field(default_factory=SubstitutionsConfig)
     output_scan: OutputScanConfig = Field(default_factory=OutputScanConfig)
     pseudonymization: PseudonymizationConfig = Field(default_factory=PseudonymizationConfig)
     overrides: OverridesConfig = Field(default_factory=OverridesConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
     upstream: UpstreamConfig = Field(default_factory=UpstreamConfig)
+    upstreams: list[UpstreamConfig] = Field(default_factory=list)
+    mcp: McpConfig = Field(default_factory=McpConfig)
+    tools: ToolsConfig = Field(default_factory=ToolsConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    # SQLite/JSON store for console-managed runtime overrides. Empty disables
+    # runtime persistence (changes live only for the process lifetime).
+    runtime_config_path: str = "${LONO_DATA_DIR:-data}/runtime_config.json"
 
     @field_validator("mode", mode="before")
     @classmethod
     def _lower_mode(cls, value: object) -> object:
         return value.lower() if isinstance(value, str) else value
+
+    def all_upstreams(self) -> list[UpstreamConfig]:
+        """Default upstream first, then additional named upstreams (deduped)."""
+        routes = [self.upstream]
+        seen = {self.upstream.name}
+        for upstream in self.upstreams:
+            if upstream.name in seen:
+                continue
+            seen.add(upstream.name)
+            routes.append(upstream)
+        return routes
 
 
 def _default_config_paths() -> list[Path]:
@@ -255,6 +348,8 @@ def _apply_env_overrides(cfg: SecurityConfig) -> None:
             cfg.audit.sqlite_path = str(Path(data_dir) / "audit.db")
         if cfg.audit.media.local_path.startswith("/data") or cfg.audit.media.local_path.startswith("data"):
             cfg.audit.media.local_path = str(Path(data_dir) / "media")
+        if cfg.runtime_config_path.startswith("/data") or cfg.runtime_config_path.startswith("data"):
+            cfg.runtime_config_path = str(Path(data_dir) / "runtime_config.json")
 
     if (value := env("LONO_MEDIA_BACKEND")) is not None:
         cfg.audit.media.backend = value.lower()  # type: ignore[assignment]

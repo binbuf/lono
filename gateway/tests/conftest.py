@@ -54,6 +54,7 @@ def settings(tmp_path) -> SecurityConfig:
     cfg.audit.media.local_path = str(tmp_path / "media")
     cfg.audit.langfuse.enabled = False
     cfg.auth.admin_key = "test-admin"
+    cfg.runtime_config_path = str(tmp_path / "runtime_config.json")
     return cfg
 
 

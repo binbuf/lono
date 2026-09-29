@@ -25,6 +25,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from lono_gateway.audit.media import externalize_media
+from lono_gateway.audit.tools import extract_tool_events
 from lono_gateway.models import Finding, RequestContext
 from lono_gateway.pipeline.shapes import extract_usage
 from lono_gateway.pipeline.streaming import StreamOutcome, StreamTranslator
@@ -207,6 +208,12 @@ async def _handle(request: Request) -> Response:
         client_meta=_client_meta(request),
     )
 
+    upstream = state.upstreams.select(
+        path=path,
+        model=(payload or {}).get("model") if isinstance(payload, dict) else None,
+        headers=request.headers,
+    )
+
     # 1. Audit the original exactly as it arrived (media externalized into CAS).
     original_audit, original_media = await externalize_media(payload, state.media, request_id)
 
@@ -240,6 +247,7 @@ async def _handle(request: Request) -> Response:
             method=request.method,
             path=path,
             model=(payload or {}).get("model"),
+            provider=upstream.name,
             stream=1 if stream_requested else 0,
             status="pending",
             request_original=json.dumps(original_audit, ensure_ascii=False)
@@ -250,6 +258,17 @@ async def _handle(request: Request) -> Response:
             findings_count=len(findings),
             client_meta_json=json.dumps(ctx.client_meta, ensure_ascii=False),
             media_json=json.dumps(media_refs, ensure_ascii=False),
+        )
+        state.store.record_tool_events(
+            extract_tool_events(
+                original_audit,
+                shape=shape,
+                source="request",
+                request_id=request_id,
+                session_id=ctx.session_id,
+                project=ctx.project,
+                cfg=cfg.tools,
+            )
         )
 
     if blocked:
@@ -280,10 +299,10 @@ async def _handle(request: Request) -> Response:
         if payload is not None
         else body
     )
-    headers = state.upstream.filter_headers(request.headers)
+    headers = upstream.filter_headers(request.headers)
     upstream_path = path + (f"?{request.url.query}" if request.url.query else "")
     try:
-        upstream_response = await state.upstream.send(
+        upstream_response = await upstream.send(
             request.method, upstream_path, headers=headers, content=upstream_body, stream=stream_requested
         )
     except httpx.HTTPError as exc:
@@ -367,6 +386,19 @@ async def _buffered(
         response_audit, media_refs = await externalize_media(response_payload, state.media, ctx.request_id)
         model = response_payload.get("model")
         usage = extract_usage("passthrough", response_payload)
+
+    if cfg.audit.enabled:
+        state.store.record_tool_events(
+            extract_tool_events(
+                response_payload,
+                shape=ctx.shape,
+                source="response",
+                request_id=ctx.request_id,
+                session_id=ctx.session_id,
+                project=ctx.project,
+                cfg=cfg.tools,
+            )
+        )
 
     await _finish(
         state,
@@ -474,6 +506,18 @@ async def _finish_stream(
         except Exception as exc:  # noqa: BLE001
             logger.warning("post-stream output scan failed: %s", exc.__class__.__name__)
     status = "client_disconnected" if disconnected else ("error" if error else "completed")
+    if cfg.audit.enabled:
+        state.store.record_tool_events(
+            extract_tool_events(
+                assembled,
+                shape=ctx.shape,
+                source="response",
+                request_id=ctx.request_id,
+                session_id=ctx.session_id,
+                project=ctx.project,
+                cfg=cfg.tools,
+            )
+        )
     await _finish(
         state,
         ctx.request_id,

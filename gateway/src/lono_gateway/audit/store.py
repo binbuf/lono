@@ -23,6 +23,7 @@ _BEGIN_FIELDS = {
     "method",
     "path",
     "model",
+    "provider",
     "stream",
     "status",
     "created_at",
@@ -136,6 +137,46 @@ CREATE TABLE IF NOT EXISTS overrides (
     revoked INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_overrides_active ON overrides(kind, category, revoked);
+
+CREATE TABLE IF NOT EXISTS tool_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id TEXT,
+    session_id TEXT,
+    project TEXT,
+    created_at TEXT NOT NULL,
+    source TEXT,
+    tool_name TEXT,
+    call_id TEXT,
+    kind TEXT,
+    command TEXT,
+    arguments TEXT,
+    preview TEXT,
+    is_command INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_tool_events_request ON tool_events(request_id);
+CREATE INDEX IF NOT EXISTS idx_tool_events_session ON tool_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_tool_events_tool ON tool_events(tool_name);
+CREATE INDEX IF NOT EXISTS idx_tool_events_created ON tool_events(created_at);
+
+CREATE TABLE IF NOT EXISTS mcp_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id TEXT,
+    session_id TEXT,
+    project TEXT,
+    created_at TEXT NOT NULL,
+    server TEXT,
+    method TEXT,
+    direction TEXT,
+    kind TEXT,
+    params TEXT,
+    result_preview TEXT,
+    is_error INTEGER NOT NULL DEFAULT 0,
+    latency_ms INTEGER,
+    raw TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_events_request ON mcp_events(request_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_events_server ON mcp_events(server);
+CREATE INDEX IF NOT EXISTS idx_mcp_events_created ON mcp_events(created_at);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS requests_fts USING fts5(
     request_original,
@@ -402,6 +443,8 @@ class AuditStore:
                 "SELECT COUNT(*) AS requests, SUM(COALESCE(blocked,0)) AS blocked, "
                 "SUM(COALESCE(findings_count,0)) AS findings, "
                 "SUM(COALESCE(total_tokens,0)) AS tokens, SUM(COALESCE(cost_usd,0)) AS cost_usd, "
+                "SUM(COALESCE(prompt_tokens,0)) AS prompt_tokens, "
+                "SUM(COALESCE(completion_tokens,0)) AS completion_tokens, "
                 "SUM(CASE WHEN status IN ('error','upstream_error') THEN 1 ELSE 0 END) AS errors "
                 "FROM requests WHERE created_at >= ?",
                 (since,),
@@ -443,6 +486,34 @@ class AuditStore:
                 "SUM(COALESCE(total_tokens,0)) AS tokens FROM requests "
                 "WHERE created_at >= ? AND session_id IS NOT NULL "
                 "GROUP BY session_id ORDER BY requests DESC LIMIT 10",
+                (since,),
+            ).fetchall()
+            by_provider = self._conn.execute(
+                "SELECT COALESCE(provider,'(default)') AS provider, COUNT(*) AS requests, "
+                "SUM(COALESCE(total_tokens,0)) AS tokens, SUM(COALESCE(cost_usd,0)) AS cost_usd "
+                "FROM requests WHERE created_at >= ? GROUP BY provider ORDER BY requests DESC",
+                (since,),
+            ).fetchall()
+            by_shape = self._conn.execute(
+                "SELECT api_shape, COUNT(*) AS count FROM requests WHERE created_at >= ? "
+                "GROUP BY api_shape ORDER BY count DESC",
+                (since,),
+            ).fetchall()
+            by_path = self._conn.execute(
+                "SELECT path, COUNT(*) AS requests, SUM(COALESCE(findings_count,0)) AS findings, "
+                "SUM(COALESCE(total_tokens,0)) AS tokens FROM requests WHERE created_at >= ? "
+                "GROUP BY path ORDER BY requests DESC LIMIT 12",
+                (since,),
+            ).fetchall()
+            by_http_status = self._conn.execute(
+                "SELECT http_status, COUNT(*) AS count FROM requests "
+                "WHERE created_at >= ? AND http_status IS NOT NULL GROUP BY http_status ORDER BY count DESC",
+                (since,),
+            ).fetchall()
+            latency_series = self._conn.execute(
+                "SELECT substr(created_at,1,13) || ':00:00Z' AS bucket, "
+                "AVG(latency_ms) AS avg_ms, MAX(latency_ms) AS max_ms FROM requests "
+                "WHERE created_at >= ? AND latency_ms IS NOT NULL GROUP BY bucket ORDER BY bucket",
                 (since,),
             ).fetchall()
 
@@ -500,6 +571,8 @@ class AuditStore:
                 "blocked": totals["blocked"] or 0,
                 "findings": totals["findings"] or 0,
                 "tokens": totals["tokens"] or 0,
+                "prompt_tokens": totals["prompt_tokens"] or 0,
+                "completion_tokens": totals["completion_tokens"] or 0,
                 "cost_usd": totals["cost_usd"] or 0.0,
                 "errors": totals["errors"] or 0,
                 "blocked_rate": (totals["blocked"] or 0) / totals["requests"] if totals["requests"] else 0.0,
@@ -508,6 +581,14 @@ class AuditStore:
             "by_status": [dict(row) for row in by_status],
             "by_mode": [dict(row) for row in by_mode],
             "by_model": [dict(row) for row in by_model],
+            "by_provider": [dict(row) for row in by_provider],
+            "by_shape": [dict(row) for row in by_shape],
+            "by_path": [dict(row) for row in by_path],
+            "by_http_status": [dict(row) for row in by_http_status],
+            "latency_series": [
+                {"t": row["bucket"], "avg_ms": int(row["avg_ms"] or 0), "max_ms": int(row["max_ms"] or 0)}
+                for row in latency_series
+            ],
             "by_kind": _top(kinds),
             "by_action": _top(actions),
             "by_detector": _top(detectors),
@@ -520,6 +601,7 @@ class AuditStore:
                 "max": max(latency_values) if latency_values else None,
             },
             "top_sessions": [dict(row) for row in top_sessions],
+            "tools": self.tool_stats(hours),
         }
 
     def prune(self, retention_days: int | None = None) -> int:
@@ -694,6 +776,242 @@ class AuditStore:
             (utc_now(),),
         )
         return cursor.rowcount
+
+    # ----------------------------------------------------------------- tools
+
+    def record_tool_events(self, events: list[dict[str, Any]]) -> int:
+        if not events:
+            return 0
+        columns = (
+            "request_id",
+            "session_id",
+            "project",
+            "created_at",
+            "source",
+            "tool_name",
+            "call_id",
+            "kind",
+            "command",
+            "arguments",
+            "preview",
+            "is_command",
+        )
+        now = utc_now()
+        rows = []
+        for event in events:
+            event = {**event}
+            event.setdefault("created_at", now)
+            event.setdefault("is_command", 0)
+            rows.append(tuple(event.get(column) for column in columns))
+        placeholders = ", ".join("?" for _ in columns)
+        with self._lock:
+            cursor = self._conn.executemany(
+                f"INSERT INTO tool_events ({', '.join(columns)}) VALUES ({placeholders})", rows
+            )
+            self._conn.commit()
+            return cursor.rowcount
+
+    def list_tool_events(
+        self,
+        *,
+        query: str | None = None,
+        session_id: str | None = None,
+        request_id: str | None = None,
+        tool: str | None = None,
+        only_commands: bool = False,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        conditions: list[str] = []
+        params: list[Any] = []
+        if query:
+            conditions.append(
+                "(t.tool_name LIKE ? OR t.command LIKE ? OR t.arguments LIKE ? OR t.preview LIKE ?)"
+            )
+            needle = f"%{query}%"
+            params.extend([needle, needle, needle, needle])
+        if session_id:
+            conditions.append("t.session_id = ?")
+            params.append(session_id)
+        if request_id:
+            conditions.append("t.request_id = ?")
+            params.append(request_id)
+        if tool:
+            conditions.append("t.tool_name = ?")
+            params.append(tool)
+        if only_commands:
+            conditions.append("t.is_command = 1")
+        if since:
+            conditions.append("t.created_at >= ?")
+            params.append(since)
+        if until:
+            conditions.append("t.created_at <= ?")
+            params.append(until)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        limit = max(1, min(limit, 1000))
+        with self._lock:
+            total = self._conn.execute(
+                f"SELECT COUNT(*) AS count FROM tool_events t {where}", tuple(params)
+            ).fetchone()["count"]
+            rows = self._conn.execute(
+                f"SELECT t.*, r.model AS request_model, r.path AS request_path, "
+                "r.status AS request_status, r.created_at AS request_created_at, "
+                "r.session_id AS request_session_id "
+                f"FROM tool_events t LEFT JOIN requests r ON r.id = t.request_id {where} "
+                "ORDER BY t.created_at DESC, t.id DESC LIMIT ? OFFSET ?",
+                (*params, limit, max(0, offset)),
+            ).fetchall()
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": max(0, offset),
+            "items": [dict(row) for row in rows],
+        }
+
+    # ------------------------------------------------------------------- mcp
+
+    def record_mcp_events(self, events: list[dict[str, Any]]) -> int:
+        if not events:
+            return 0
+        columns = (
+            "request_id",
+            "session_id",
+            "project",
+            "created_at",
+            "server",
+            "method",
+            "direction",
+            "kind",
+            "params",
+            "result_preview",
+            "is_error",
+            "latency_ms",
+            "raw",
+        )
+        now = utc_now()
+        rows = []
+        for event in events:
+            event = {**event}
+            event.setdefault("created_at", now)
+            event.setdefault("is_error", 0)
+            rows.append(tuple(event.get(column) for column in columns))
+        placeholders = ", ".join("?" for _ in columns)
+        with self._lock:
+            cursor = self._conn.executemany(
+                f"INSERT INTO mcp_events ({', '.join(columns)}) VALUES ({placeholders})", rows
+            )
+            self._conn.commit()
+            return cursor.rowcount
+
+    def list_mcp_events(
+        self,
+        *,
+        query: str | None = None,
+        session_id: str | None = None,
+        request_id: str | None = None,
+        server: str | None = None,
+        method: str | None = None,
+        errors_only: bool = False,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        conditions: list[str] = []
+        params: list[Any] = []
+        if query:
+            conditions.append("(m.method LIKE ? OR m.server LIKE ? OR m.params LIKE ? OR m.result_preview LIKE ?)")
+            needle = f"%{query}%"
+            params.extend([needle, needle, needle, needle])
+        if session_id:
+            conditions.append("m.session_id = ?")
+            params.append(session_id)
+        if request_id:
+            conditions.append("m.request_id = ?")
+            params.append(request_id)
+        if server:
+            conditions.append("m.server = ?")
+            params.append(server)
+        if method:
+            conditions.append("m.method = ?")
+            params.append(method)
+        if errors_only:
+            conditions.append("m.is_error = 1")
+        if since:
+            conditions.append("m.created_at >= ?")
+            params.append(since)
+        if until:
+            conditions.append("m.created_at <= ?")
+            params.append(until)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        limit = max(1, min(limit, 1000))
+        with self._lock:
+            total = self._conn.execute(
+                f"SELECT COUNT(*) AS count FROM mcp_events m {where}", tuple(params)
+            ).fetchone()["count"]
+            rows = self._conn.execute(
+                f"SELECT m.*, r.status AS request_status, r.created_at AS request_created_at "
+                f"FROM mcp_events m LEFT JOIN requests r ON r.id = m.request_id {where} "
+                "ORDER BY m.created_at DESC, m.id DESC LIMIT ? OFFSET ?",
+                (*params, limit, max(0, offset)),
+            ).fetchall()
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": max(0, offset),
+            "items": [dict(row) for row in rows],
+        }
+
+    def tool_stats(self, hours: int = 24) -> dict[str, Any]:
+        hours = max(1, min(int(hours), 24 * 30))
+        now = datetime.now(UTC)
+        since = (now - timedelta(hours=hours)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        with self._lock:
+            totals = self._conn.execute(
+                "SELECT COUNT(*) AS events, SUM(CASE WHEN is_command = 1 THEN 1 ELSE 0 END) AS commands, "
+                "COUNT(DISTINCT tool_name) AS tools FROM tool_events WHERE created_at >= ?",
+                (since,),
+            ).fetchone()
+            by_tool = self._conn.execute(
+                "SELECT COALESCE(tool_name, '(unknown)') AS name, COUNT(*) AS count, "
+                "SUM(CASE WHEN is_command = 1 THEN 1 ELSE 0 END) AS commands "
+                "FROM tool_events WHERE created_at >= ? GROUP BY tool_name ORDER BY count DESC LIMIT 20",
+                (since,),
+            ).fetchall()
+            top_commands = self._conn.execute(
+                "SELECT command, tool_name, created_at, request_id FROM tool_events "
+                "WHERE created_at >= ? AND is_command = 1 AND command IS NOT NULL "
+                "ORDER BY created_at DESC LIMIT 20",
+                (since,),
+            ).fetchall()
+            mcp_totals = self._conn.execute(
+                "SELECT COUNT(*) AS calls, SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) AS errors "
+                "FROM mcp_events WHERE created_at >= ?",
+                (since,),
+            ).fetchone()
+            mcp_by_server = self._conn.execute(
+                "SELECT COALESCE(server, '(unknown)') AS name, COUNT(*) AS count "
+                "FROM mcp_events WHERE created_at >= ? GROUP BY server ORDER BY count DESC LIMIT 20",
+                (since,),
+            ).fetchall()
+            mcp_by_method = self._conn.execute(
+                "SELECT COALESCE(method, '(unknown)') AS name, COUNT(*) AS count "
+                "FROM mcp_events WHERE created_at >= ? GROUP BY method ORDER BY count DESC LIMIT 20",
+                (since,),
+            ).fetchall()
+        return {
+            "events": totals["events"] or 0,
+            "commands": totals["commands"] or 0,
+            "tools": totals["tools"] or 0,
+            "by_tool": [dict(row) for row in by_tool],
+            "top_commands": [dict(row) for row in top_commands],
+            "mcp_calls": mcp_totals["calls"] or 0,
+            "mcp_errors": mcp_totals["errors"] or 0,
+            "mcp_by_server": [dict(row) for row in mcp_by_server],
+            "mcp_by_method": [dict(row) for row in mcp_by_method],
+        }
 
     def close(self) -> None:
         with self._lock:

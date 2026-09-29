@@ -20,6 +20,8 @@ code{background:#1e2733;padding:2px 6px;border-radius:4px}</style></head>
 <body><h1>Lono</h1>
 <p>The console assets are not built in this checkout.</p>
 <p>Run <code>cd gateway/ui &amp;&amp; npm install &amp;&amp; npm run build</code>, then reload.</p>
+<p>The console is a Svelte 5 management app (login, stats, requests, tools &amp; MCP, substitutions,
+providers, configuration, overrides, mappings).</p>
 </body></html>"""
 
 

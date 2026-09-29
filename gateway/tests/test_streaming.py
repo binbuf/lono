@@ -5,7 +5,7 @@ import json
 from lono_gateway.pipeline.streaming import StreamTranslator
 from lono_gateway.rehydrator import StreamingRehydrator
 
-WINDOWS_PATH = r"C:\Users\dan\.config\opencode\opencode.json"
+WINDOWS_PATH = r"C:\Users\youruser\.config\opencode\opencode.json"
 
 
 def _sse(payload: dict) -> bytes:
@@ -129,5 +129,5 @@ def test_streaming_anthropic_input_json_stays_valid() -> None:
 def test_streaming_rehydrator_json_escape() -> None:
     stream = StreamingRehydrator({"Vera": WINDOWS_PATH}, json_escape=True)
     assert stream.feed('"Ve') == '"'
-    assert stream.feed('ra"') == 'C:\\\\Users\\\\dan\\\\.config\\\\opencode\\\\opencode.json"'
+    assert stream.feed('ra"') == 'C:\\\\Users\\\\youruser\\\\.config\\\\opencode\\\\opencode.json"'
     assert stream.flush() == ""

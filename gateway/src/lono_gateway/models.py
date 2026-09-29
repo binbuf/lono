@@ -29,6 +29,9 @@ class Detection(BaseModel):
     score: float = 0.5
     suggested: str = "flag"
     value: str = ""
+    # Explicit literal replacement (keyword swaps). When set, the pseudonymizer
+    # uses it verbatim instead of generating a synthetic value.
+    replacement: str = ""
 
 
 class Finding(BaseModel):

@@ -5,6 +5,9 @@ mode: sanitize # observe | sanitize | enforce
 fail_closed: false
 allow_client_mode_override: false # allow X-Lono-Mode header to override mode per request
 inspect_tools: false # scan tool descriptions (flag-only)
+# Console-managed runtime overrides (detector toggles, substitutions, upstreams,
+# MCP servers). Written by the console API and re-applied on startup.
+runtime_config_path: ${LONO_DATA_DIR:-data}/runtime_config.json
 
 detectors:
   secrets:
@@ -74,6 +77,40 @@ watchlist:
   #   category: INTERNAL_NAME
   #   action: mask
 
+# Literal keyword swaps: replace exact strings with chosen values (still
+# reversible — provider output that echoes the replacement is rehydrated).
+# Managed from the console's Substitutions page.
+substitutions:
+  enabled: true
+  terms: []
+  # - pattern: "youruser"
+  #   replacement: "alex"
+  #   match: word            # word | substring | regex
+  # - pattern: 'C:\\Users\\youruser'
+  #   replacement: '/home/user'
+  #   match: substring
+  # - pattern: '\bgh/([a-z0-9-]+)\b'
+  #   replacement: 'gh/redacted-user'
+  #   match: regex
+
+# Tool / command / MCP activity extraction for the console's Tools page.
+tools:
+  enabled: true
+  extract_commands: true
+  command_tools: [bash, shell, sh, run_command, execute_command, terminal, exec, run_shell_command, command]
+  max_events_per_request: 200
+  preview_chars: 2000
+
+# MCP servers proxied (and audited) under /v1/mcp/{name}. Managed from the
+# console's Tools page.
+mcp:
+  enabled: true
+  timeout_s: 120
+  servers: []
+  # - name: filesystem
+  #   url: http://mcp-filesystem:3000
+  #   headers: {}
+
 output_scan:
   enabled: true
   secrets: true
@@ -138,11 +175,17 @@ audit:
     secret_key: ${LANGFUSE_SECRET_KEY:-}
     max_chars: 100000
 
+# Default provider proxy. Additional proxies run concurrently; a request is
+# routed by the x-lono-upstream header, then by model glob, then path prefix.
 upstream:
+  name: default
   base_url: ${LONO_UPSTREAM_URL:-http://litellm:4000}
+  enabled: true
   timeout_s: 900
   connect_timeout_s: 10
   max_body_bytes: 50000000
+  models: []
+  path_prefixes: []
   forward_headers:
     - authorization
     - x-api-key
@@ -152,6 +195,15 @@ upstream:
     - openai-project
     - content-type
     - accept
+
+upstreams: []
+# - name: anthropic-direct
+#   base_url: https://api.anthropic.com
+#   models: ["claude-*"]
+#   forward_headers: [x-api-key, anthropic-version, content-type, accept]
+# - name: openai-direct
+#   base_url: https://api.openai.com/v1
+#   models: ["gpt-*", "o1-*", "o3-*"]
 
 auth:
   admin_key: ${LONO_ADMIN_KEY:-}

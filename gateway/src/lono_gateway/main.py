@@ -11,13 +11,15 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from lono_gateway import __version__
-from lono_gateway.api import audit_api, health, proxy, ui
+from lono_gateway.api import audit_api, health, mcp, proxy, ui
 from lono_gateway.audit.langfuse import LangfuseTracer
 from lono_gateway.audit.media import MediaStore
 from lono_gateway.audit.store import AuditStore
+from lono_gateway.config_manager import ConfigManager
+from lono_gateway.mcp import McpRegistry
 from lono_gateway.pipeline.engine import SecurityPipeline
 from lono_gateway.settings import SecurityConfig, load_settings
-from lono_gateway.upstream import UpstreamClient
+from lono_gateway.upstream import UpstreamRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,7 @@ logger = logging.getLogger(__name__)
 def create_app(
     settings: SecurityConfig | None = None,
     upstream_transport: httpx.AsyncBaseTransport | None = None,
+    mcp_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     cfg = settings or load_settings()
 
@@ -34,20 +37,30 @@ def create_app(
         store.prune()
         media = MediaStore(cfg.audit.media, store)
         await media.ensure_ready()
+        # Runtime overrides are applied before detectors/upstreams are built so
+        # console-managed values win over file + environment.
+        config_manager = ConfigManager(cfg)
+        config_manager.load()
         pipeline = SecurityPipeline(cfg, store)
-        upstream = UpstreamClient(cfg.upstream, transport=upstream_transport)
+        upstreams = UpstreamRegistry(cfg, transport=upstream_transport)
+        mcp_registry = McpRegistry(cfg.mcp, transport=mcp_transport)
         tracer = LangfuseTracer(cfg.audit.langfuse)
+        config_manager.add_listener(pipeline.reload)
+        config_manager.add_listener(lambda: upstreams.reload(cfg))
+        config_manager.add_listener(lambda: mcp_registry.reload(cfg.mcp))
 
         app.state.store = store
         app.state.media = media
         app.state.pipeline = pipeline
-        app.state.upstream = upstream
+        app.state.upstreams = upstreams
+        app.state.mcp = mcp_registry
+        app.state.config_manager = config_manager
         app.state.tracer = tracer
 
         logger.info(
-            "Lono ready: mode=%s upstream=%s audit_store=%s media=%s langfuse=%s",
+            "Lono ready: mode=%s upstreams=%s audit_store=%s media=%s langfuse=%s",
             cfg.mode,
-            cfg.upstream.base_url,
+            ",".join(upstreams.names()),
             cfg.audit.sqlite_path,
             cfg.audit.media.backend if cfg.audit.media.enabled else "disabled",
             "enabled" if tracer.enabled else "disabled",
@@ -55,7 +68,8 @@ def create_app(
         try:
             yield
         finally:
-            await upstream.aclose()
+            await upstreams.aclose()
+            await mcp_registry.aclose()
             await pipeline.aclose()
             await tracer.aclose()
             store.close()
@@ -70,6 +84,9 @@ def create_app(
     )
     app.state.settings = cfg
     app.include_router(health.router)
+    # MCP must be registered before the OpenAI passthrough catch-all so its
+    # /v1/mcp routes win.
+    app.include_router(mcp.router)
     app.include_router(proxy.router)
     app.include_router(audit_api.router)
     # Assets must be mounted before the SPA catch-all route so hashed bundles

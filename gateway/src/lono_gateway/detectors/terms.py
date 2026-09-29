@@ -49,6 +49,7 @@ class _CompiledTerm:
                 score=0.95,
                 suggested=self.term.action,
                 value=match.group(0),
+                replacement=self.term.replacement,
             )
             for match in self.regex.finditer(text)
         ]

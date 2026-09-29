@@ -48,7 +48,10 @@ OpenCode / Codex / Claude / Cursor / Harness
 | Media | Images are content-addressed (SHA-256) into MinIO or a local CAS; identical images stored once. |
 | Watchlist | Your own terms — project codenames, internal names, ticket IDs — from `config/watchlist.yaml`, with per-term action and replacement type. |
 | Allow-through | Temporarily let a category or a specific value pass unchanged (e.g. a false positive), with expiry. Managed from the console or API. |
-| Console | A local SPA at `/ui`: live filtering log with reveal-able changes, per-request redaction timeline, pseudonym mappings, overrides, and a metrics dashboard. |
+| Console | A local management SPA at `/ui` (Svelte 5 + Chart.js): login with the admin key, live filtering log, per-request redaction timeline, stats with real charts, tool/MCP traffic, keyword substitutions, provider proxies, runtime configuration, overrides and mappings. |
+| Providers | Several provider proxies run concurrently. Requests route by `x-lono-upstream` header, model glob, or path prefix, then the default. |
+| Substitutions | Swap exact keywords (GitHub usernames, home paths, hostnames) for chosen values — reversible and persisted — from the console. |
+| Tools & MCP | Tool calls, shell commands and MCP JSON-RPC traffic are extracted, stored, and linked back to the request that used them. |
 | Tracing | LiteLLM and the gateway both emit traces to self-hosted Langfuse. |
 
 **Modes** (`AI_GATEWAY_MODE`, default `sanitize`):
@@ -214,7 +217,11 @@ Everything is feature-flagged in `config/security.yaml` (env-substituted with
 | `audit.retention_days` | `0` = keep forever |
 | `audit.media.backend` | `local` or `minio` |
 | `audit.langfuse.enabled` | Emit 4-stage traces to Langfuse (needs keys) |
-| `upstream.base_url` | LiteLLM or any OpenAI-compatible endpoint |
+| `upstream.base_url` / `upstreams` | Default and additional provider proxies (routed by header/model/path) |
+| `substitutions.terms` | Exact keyword swaps with chosen replacements |
+| `tools.command_tools` | Tool names whose arguments are treated as shell commands |
+| `mcp.servers` | MCP servers proxied and audited under `/v1/mcp/{name}` |
+| `runtime_config_path` | Where console-managed overrides persist |
 | `allow_client_mode_override` | Allow `X-Lono-Mode: observe` per request (diagnostics) |
 | `inspect_tools` | Scan tool descriptions (flag-only) |
 | `pseudonymization.lists` / `lists_dir` | Per-category replacement word lists |
@@ -416,22 +423,31 @@ Expired and revoked overrides are ignored automatically. Set
 
 ### The console
 
-`http://127.0.0.1:4000/ui` is a local single-page app (React + Vite). Enter the
-admin key once; it is kept in your browser's local storage. Every data call
-requires the admin key and audit text is rendered as text (never HTML). Tabs:
+`http://127.0.0.1:4000/ui` is a local management single-page app (Svelte 5 +
+Chart.js). You are shown a **login screen first**; sign in with `LONO_ADMIN_KEY`
+and it is kept in your browser's local storage. Every data call requires the
+admin key and audit text is rendered as text (never HTML). Pages:
 
-- **Filtering log** — live requests with a per-request **changes** column. Red
+- **Overview** — real charts: request/block/finding traffic, tokens (prompt vs
+  completion) and cost, latency avg/max and percentiles, findings by
+  action/category/detector, models, providers, top tools and MCP servers over
+  1h/6h/24h/7d/30d windows.
+- **Requests** — live filtering log with a per-request **changes** column. Red
   is the original text, green is what replaced it. Secret and PII values stay
-  blurred until you click *reveal* (or tick *reveal values*); `+N more` expands
-  the full list inline.
-- **Request popout** — for any request: a redaction **timeline** (red
-  strikethrough original → green replacement, click `prev`/`next` to walk each
-  one), the annotated question and response, tool calls, and the four raw audit
+  blurred until you reveal them. Click a row for the **request detail** drawer:
+  a redaction timeline, tool activity, client metadata and the four raw audit
   stages.
-- **Dashboard** — Grafana/Datadog-style metrics: request/block/finding traffic,
-  tokens and cost over time, findings by category/action/detector, latency
-  percentiles, models and busiest sessions, over 1h/6h/24h/7d/30d windows.
-- **Overrides** / **Mappings** — allow-through controls and pseudonym mappings.
+- **Tools & MCP** — every tool call, shell command and MCP JSON-RPC message,
+  each linked back to the request (task) that produced it, with filters and
+  summary charts.
+- **Substitutions** — keyword swaps: pick a preset (GitHub username, home path,
+  email alias) or supply a pattern/replacement; they apply live and persist.
+- **Providers** — manage the provider proxies and MCP servers at runtime.
+- **Configuration** — edit the configurable surface (mode, fail-closed,
+  detector toggles/actions/thresholds, output scan, pseudonymization, overrides,
+  audit retention) and save it live.
+- **Overrides** / **Mappings** / **Sessions** — allow-through controls,
+  pseudonym mappings and session activity.
 
 The app is served without auth; the API needs the admin key. To rebuild the
 console after editing `gateway/ui/`:
@@ -439,6 +455,84 @@ console after editing `gateway/ui/`:
 ```bash
 cd gateway/ui && npm install && npm run build   # outputs into the Python package
 ```
+
+### Multiple provider proxies
+
+The gateway can forward to several provider proxies concurrently. `upstream` in
+`security.yaml` is the default route; add more under `upstreams`. A request is
+routed by the `x-lono-upstream` header, then the first enabled upstream whose
+`models` glob matches the request model, then a `path_prefixes` match, then the
+default:
+
+```yaml
+upstream:
+  name: default
+  base_url: ${LONO_UPSTREAM_URL:-http://litellm:4000}
+
+upstreams:
+  - name: anthropic-direct
+    base_url: https://api.anthropic.com
+    models: ["claude-*"]
+    forward_headers: [x-api-key, anthropic-version, content-type, accept]
+  - name: openai-direct
+    base_url: https://api.openai.com/v1
+    models: ["gpt-*", "o1-*", "o3-*"]
+```
+
+Clients can also pick one explicitly with `X-Lono-Upstream: anthropic-direct`.
+The chosen upstream name is recorded as the request `provider` and shown on the
+Overview page. Manage them at runtime from the console (Providers page) or
+`GET /audit/upstreams`.
+
+### Keyword substitutions
+
+Substitutions replace an exact string with a value you choose, and are still
+reversible: if a provider echoes the replacement, Lono rehydrates it. Add them
+in the console (Substitutions page) or in `security.yaml`:
+
+```yaml
+substitutions:
+  enabled: true
+  terms:
+    - pattern: "youruser"
+      replacement: "alex"
+      match: word
+    - pattern: 'C:\\Users\\youruser'
+      replacement: '/home/user'
+      match: substring
+```
+
+### Tool, command and MCP auditing
+
+Lono extracts tool calls, tool results and shell commands from every audited
+payload (OpenAI and Anthropic shapes) and stores them as queryable events,
+linked to the request that produced them (`GET /audit/tools`). Commands are
+detected for tools named in `tools.command_tools`.
+
+MCP servers are proxied (and audited) under `/v1/mcp/{server}`:
+
+```yaml
+mcp:
+  enabled: true
+  servers:
+    - name: filesystem
+      url: http://mcp-filesystem:3000
+      headers: {}
+```
+
+Point an MCP client at `http://127.0.0.1:4000/v1/mcp/filesystem`; each JSON-RPC
+message is recorded (`GET /audit/mcp`) and the call appears as an `mcp` request
+with its server as the provider. `POST /v1/mcp` uses `X-Lono-Mcp-Server`, or the
+only configured server.
+
+### Runtime configuration
+
+The console's Configuration, Substitutions, Providers and MCP pages change a
+curated, validated subset of the config **live** and persist it to
+`runtime_config.json` (under `LONO_DATA_DIR`). These overrides are re-applied on
+startup, so console changes survive restarts. Secrets, admin keys and media
+credentials are never exposed or editable. Read the current configuration from
+`GET /audit/config`; apply a patch with `PATCH /audit/config`.
 
 ## Security notes
 
@@ -498,8 +592,8 @@ media content-addressing.
 
 ## Roadmap / non-goals
 
-- MCP/tool gateway inside the same trust boundary (planned; LiteLLM can already
-  restrict MCP by key/team).
+- MCP/tool gateway inside the same trust boundary — available at `/v1/mcp/{server}`
+  with auditing; richer MCP policy (per-tool allow/deny) is future work.
 - Perfect prompt-injection prevention (not possible; Lono is one layer).
 - The gateway is not a general AI client or a provider.
 
@@ -510,7 +604,7 @@ compose.yaml            full stack (gateway, litellm, presidio, langfuse, minio,
 config/                 security.yaml, litellm.yaml, presidio/patterns.yaml,
                         watchlist.yaml, lists/*.txt (replacement word lists)
 gateway/                thin Python gateway (FastAPI): pipeline, audit, proxy
-gateway/ui/             console SPA (React + Vite); built into the gateway image
+gateway/ui/             console SPA (Svelte 5 + Chart.js); built into the gateway image
 scripts/                install/start/stop for Windows (.ps1) and macOS/Linux (.sh)
 data/                   runtime state: audit.db, media CAS (gitignored)
 ```

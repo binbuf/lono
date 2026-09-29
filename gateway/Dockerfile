@@ -1,4 +1,4 @@
-# Build the console SPA (Vite + React) and bundle it into the gateway image.
+# Build the console SPA (Vite + Svelte 5) and bundle it into the gateway image.
 FROM node:22-slim AS ui-build
 WORKDIR /ui
 COPY ui/package.json ui/package-lock.json ./
