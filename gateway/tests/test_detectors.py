@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from lono_gateway.detectors.injection import InjectionDetector
-from lono_gateway.detectors.pii import PiiDetector
+from lono_gateway.detectors.pii import PiiDetector, plausible_entity
 from lono_gateway.detectors.secrets import SecretDetector, shannon_entropy
 from lono_gateway.detectors.urls import UrlDetector
+from lono_gateway.models import Detection
 from lono_gateway.settings import InjectionConfig, PiiConfig, SecretsConfig, UrlsConfig
 
 
@@ -84,7 +85,6 @@ def test_extended_secret_patterns() -> None:
 
 
 def test_unconfigured_presidio_entity_is_dropped() -> None:
-    from lono_gateway.models import Detection
     from lono_gateway.pipeline.engine import SecurityPipeline
     from lono_gateway.settings import SecurityConfig
 
@@ -108,4 +108,69 @@ async def test_pii_street_postal_and_crypto() -> None:
     assert "STREET_ADDRESS" in kinds
     assert "POSTAL_CODE" in kinds
     assert "BTC_ADDRESS" in kinds
+    await detector.aclose()
+
+
+def test_plausible_entity_rejects_code_tokens() -> None:
+    for kind, value in [
+        ("PERSON", "node_modules"),
+        ("PERSON", "opencode"),
+        ("PERSON", "LITELLM_MASTER_KEY"),
+        ("PERSON", "claude-sonnet-4-6"),
+        ("PERSON", r"C:\Users\dan\.config\opencode"),
+        ("LOCATION", "JSON"),
+        ("LOCATION", "httpx"),
+        ("LOCATION", "modelID"),
+        ("ORGANIZATION", "cgr.dev/chainguard/minio"),
+        ("PHONE_NUMBER", "384000"),
+    ]:
+        assert not plausible_entity(kind, value), (kind, value)
+
+
+def test_plausible_entity_keeps_real_values() -> None:
+    for kind, value in [
+        ("PERSON", "Steve"),
+        ("PERSON", "Steve Smith"),
+        ("PERSON", "O'Brien"),
+        ("PERSON", "van der Berg"),
+        ("LOCATION", "New York"),
+        ("ORGANIZATION", "Acme Corp"),
+        ("PHONE_NUMBER", "+1-555-0134"),
+        ("EMAIL_ADDRESS", "steve@mycompany.com"),
+    ]:
+        assert plausible_entity(kind, value), (kind, value)
+
+
+async def test_regex_street_address_ignores_lowercase_suffix() -> None:
+    detector = PiiDetector(PiiConfig(engine="regex"), fail_closed=False)
+    kinds = {detection.kind for detection in await detector.scan("1 reading from st and 802 Downloading st")}
+    assert "STREET_ADDRESS" not in kinds
+    await detector.aclose()
+
+
+async def test_presidio_technical_entities_are_filtered(monkeypatch) -> None:
+    detector = PiiDetector(PiiConfig(engine="presidio"), fail_closed=False)
+    assert detector.presidio is not None
+
+    async def fake_analyze(text: str) -> list[Detection]:
+        return [
+            Detection(detector="pii.presidio", kind="PERSON", start=0, end=12, score=0.9, value="node_modules"),
+            Detection(detector="pii.presidio", kind="PERSON", start=13, end=18, score=0.9, value="Steve"),
+        ]
+
+    monkeypatch.setattr(detector.presidio, "analyze", fake_analyze)
+    values = {detection.value for detection in await detector.scan("node_modules Steve")}
+    assert values == {"Steve"}
+    await detector.aclose()
+
+
+async def test_presidio_filter_can_be_disabled(monkeypatch) -> None:
+    detector = PiiDetector(PiiConfig(engine="presidio", filter_technical=False), fail_closed=False)
+
+    async def fake_analyze(text: str) -> list[Detection]:
+        return [Detection(detector="pii.presidio", kind="PERSON", start=0, end=12, score=0.9, value="node_modules")]
+
+    monkeypatch.setattr(detector.presidio, "analyze", fake_analyze)
+    values = {detection.value for detection in await detector.scan("node_modules")}
+    assert values == {"node_modules"}
     await detector.aclose()

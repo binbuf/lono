@@ -74,7 +74,7 @@
     <div class="filters">
       <input id="q" placeholder="search all stages" size="24">
       <input id="session" placeholder="session id" size="18">
-      <select id="status">
+      <select id="statusFilter">
         <option value="">any status</option>
         <option>completed</option><option>blocked</option><option>error</option>
         <option>upstream_error</option><option>client_disconnected</option>
@@ -186,9 +186,9 @@ async function loadMode() {
 async function loadLog() {
   try {
     const params = new URLSearchParams({ limit: "100" });
-    for (const id of ["q", "session", "status", "model"]) {
+    for (const [id, param] of [["q", "q"], ["session", "session"], ["statusFilter", "status"], ["model", "model"]]) {
       const value = $("#" + id).value.trim();
-      if (value) params.set(id, value);
+      if (value) params.set(param, value);
     }
     const data = await api("/audit/requests?" + params);
     const tbody = $("#logTable tbody");

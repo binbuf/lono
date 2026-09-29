@@ -150,10 +150,11 @@ class StreamTranslator:
         self._raw_parts.append(snippet)
         self._raw_len += len(snippet)
 
-    def _reh(self, key: tuple) -> StreamingRehydrator:
-        if key not in self._rehydrators:
-            self._rehydrators[key] = StreamingRehydrator(self._mappings)
-        return self._rehydrators[key]
+    def _reh(self, key: tuple, *, json_escape: bool = False) -> StreamingRehydrator:
+        cache_key = (json_escape, *key)
+        if cache_key not in self._rehydrators:
+            self._rehydrators[cache_key] = StreamingRehydrator(self._mappings, json_escape=json_escape)
+        return self._rehydrators[cache_key]
 
     def _handle_openai(self, payload: dict) -> None:
         for choice in payload.get("choices") or []:
@@ -180,7 +181,7 @@ class StreamTranslator:
                     function = tool_call.get("function")
                     if isinstance(function, dict) and isinstance(function.get("arguments"), str):
                         function["arguments"] = self._reh(
-                            ("o", index, "tool", tool_index)
+                            ("o", index, "tool", tool_index), json_escape=True
                         ).feed(function["arguments"])
             self._accumulate_openai(choice)
         if isinstance(payload.get("usage"), dict):
@@ -246,7 +247,9 @@ class StreamTranslator:
                     delta["thinking"] = self._reh(("a", index, "thinking")).feed(delta["thinking"])
                     self._append_anthropic_field(index, "thinking", delta["thinking"])
                 elif delta_type == "input_json_delta" and isinstance(delta.get("partial_json"), str):
-                    delta["partial_json"] = self._reh(("a", index, "input")).feed(delta["partial_json"])
+                    delta["partial_json"] = self._reh(("a", index, "input"), json_escape=True).feed(
+                        delta["partial_json"]
+                    )
                     block = self._anthropic_blocks.setdefault(index, {"type": "tool_use", "input": {}})
                     block["_partial_json"] = block.get("_partial_json", "") + delta["partial_json"]
         elif event == "content_block_stop":

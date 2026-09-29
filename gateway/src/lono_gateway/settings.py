@@ -73,6 +73,7 @@ class PiiConfig(BaseModel):
     default_action: str = "pseudonymize"
     actions: dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_PII_ACTIONS))
     custom_patterns_file: str = "config/presidio/patterns.yaml"
+    filter_technical: bool = True
 
 
 class InjectionConfig(BaseModel):

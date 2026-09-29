@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from lono_gateway.models import MappingRecord
@@ -10,11 +11,27 @@ _BOUNDARY_LEFT = r"(?<![A-Za-z0-9])"
 _BOUNDARY_RIGHT = r"(?![A-Za-z0-9])"
 
 
+def _json_string_content(value: str) -> str:
+    """Escape a value so it is safe *inside* a JSON string literal.
+
+    Pseudonyms are rehydrated into tool-call arguments, which are themselves
+    JSON documents streamed as a string. If the original contains a quote,
+    backslash or control character, inserting it raw corrupts that inner JSON
+    (the client then fails with "bad escaped character"). Escaping here keeps
+    the arguments valid while still delivering the original value.
+    """
+    return json.dumps(value, ensure_ascii=False)[1:-1]
+
+
 class Rehydrator:
     """Restores original values for pseudonyms emitted by the gateway."""
 
-    def __init__(self, mappings: dict[str, str]) -> None:
+    def __init__(self, mappings: dict[str, str], *, json_escape: bool = False) -> None:
         self._mappings = dict(mappings)
+        if json_escape:
+            self._replacements = {key: _json_string_content(value) for key, value in self._mappings.items()}
+        else:
+            self._replacements = dict(self._mappings)
         self._regex: re.Pattern[str] | None = None
         if self._mappings:
             pseudonyms = sorted(self._mappings, key=len, reverse=True)
@@ -28,7 +45,7 @@ class Rehydrator:
     def rehydrate(self, text: str) -> str:
         if not self._regex or not text:
             return text
-        return self._regex.sub(lambda match: self._mappings.get(match.group(1), match.group(1)), text)
+        return self._regex.sub(lambda match: self._replacements.get(match.group(1), match.group(1)), text)
 
     def rehydrate_prefix(self, text: str, limit: int) -> str:
         """Rehydrate only matches that end at or before ``limit``.
@@ -48,7 +65,7 @@ class Rehydrator:
             if match.end() > limit:
                 break
             output.append(text[position : match.start()])
-            output.append(self._mappings.get(match.group(1), match.group(1)))
+            output.append(self._replacements.get(match.group(1), match.group(1)))
             position = match.end()
         output.append(text[position:limit])
         return "".join(output)
@@ -80,8 +97,8 @@ class StreamingRehydrator:
     rest using full-buffer context.
     """
 
-    def __init__(self, mappings: dict[str, str]) -> None:
-        self._rehydrator = Rehydrator(mappings)
+    def __init__(self, mappings: dict[str, str], *, json_escape: bool = False) -> None:
+        self._rehydrator = Rehydrator(mappings, json_escape=json_escape)
         self._pseudonyms = tuple(mappings.keys())
         self._max_len = max((len(p) for p in self._pseudonyms), default=0)
         self._buffer = ""

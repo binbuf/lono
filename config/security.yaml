@@ -24,6 +24,7 @@ detectors:
     timeout_s: 10
     default_action: pseudonymize # used for entity types not listed below
     custom_patterns_file: ${LONO_CONFIG_DIR:-/config}/presidio/patterns.yaml
+    filter_technical: true # drop Presidio name entities that look like code identifiers/paths
     actions:
       EMAIL_ADDRESS: pseudonymize
       PERSON: pseudonymize

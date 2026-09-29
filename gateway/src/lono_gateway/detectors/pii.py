@@ -30,7 +30,6 @@ _STREET_RE = re.compile(
     r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|"
     r"Place|Pl|Terrace|Ter|Highway|Hwy|Circle|Cir|Square|Sq|Parkway|Pkwy)\.?"
     r"(?:\s*,?\s*(?:Suite|Ste|Apt|Unit|#)\s*[A-Za-z0-9\-]+)?",
-    re.IGNORECASE,
 )
 _POSTAL_UK_RE = re.compile(r"\b[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2}\b")
 _POSTAL_US_RE = re.compile(r"(?<=\b[A-Z]{2}\s)\d{5}(?:-\d{4})?\b")
@@ -39,6 +38,48 @@ _ETH_RE = re.compile(r"\b0x[a-fA-F0-9]{40}\b")
 _MAC_RE = re.compile(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
 
 _MAX_CC_DIGITS = 19
+
+# Presidio's NER models fire on identifiers, file paths, build-log fragments and
+# model slugs as if they were people or places. Over a coding session this
+# pseudonymizes `node_modules`, `JSON`, model ids and Windows paths, which
+# destroys the content the model sees. These name-like entities are only kept
+# when the span actually looks like a human name; structured entities
+# (emails, cards, keys, ...) are unaffected.
+_NAME_LIKE_KINDS = frozenset({"PERSON", "PER", "LOCATION", "GPE", "LOC", "ORGANIZATION", "ORG", "NRP"})
+_PHONE_KINDS = frozenset({"PHONE_NUMBER", "PHONE"})
+_TECHNICAL_CHARS = frozenset("/\\_{}[]()<>|=;`~^$#%+*?@:")
+_UPPER = r"[A-Z]"
+_LOWERISH = r"[^\W\d_]"
+_PARTICLE = r"(?:van|von|de|del|der|den|la|le|di|da|bin|al|el|dos|das|y)"
+_NAME_WORD = rf"{_UPPER}(?:{_LOWERISH}|[.'\-])*"
+_NAME_TOKEN = rf"(?:{_PARTICLE}|{_NAME_WORD})"
+_HUMAN_NAME_RE = re.compile(rf"^{_NAME_TOKEN}(?:\s+{_NAME_TOKEN}){{0,5}}$")
+
+
+def _looks_like_name(span: str) -> bool:
+    if not span or len(span) > 80:
+        return False
+    if any(char.isdigit() for char in span):
+        return False
+    if any(char in _TECHNICAL_CHARS for char in span):
+        return False
+    # All-caps single tokens are constants/acronyms (JSON, HTTP), not names.
+    if len(span) >= 3 and " " not in span and span.isupper():
+        return False
+    return bool(_HUMAN_NAME_RE.match(span))
+
+
+def plausible_entity(kind: str, value: str) -> bool:
+    """Whether a detection span is credible for its entity category."""
+    kind = (kind or "").upper()
+    span = " ".join((value or "").split())
+    if not span:
+        return False
+    if kind in _NAME_LIKE_KINDS:
+        return _looks_like_name(span)
+    if kind in _PHONE_KINDS:
+        return sum(char.isdigit() for char in span) >= 7
+    return True
 
 
 def _luhn_ok(digits: str) -> bool:
@@ -218,7 +259,14 @@ class PiiDetector:
             return []
         detections = self.regex.scan(text)
         if self.presidio is not None:
-            detections.extend(await self.presidio.analyze(text))
+            presidio = await self.presidio.analyze(text)
+            if self.cfg.filter_technical:
+                presidio = [
+                    detection
+                    for detection in presidio
+                    if plausible_entity(detection.kind, detection.value or text[detection.start : detection.end])
+                ]
+            detections.extend(presidio)
         return detections
 
     async def aclose(self) -> None:
