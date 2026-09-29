@@ -3,7 +3,7 @@ from __future__ import annotations
 from random import Random
 
 from lono_gateway.detectors.secrets import SecretDetector
-from lono_gateway.models import Detection, RequestContext
+from lono_gateway.models import Detection, RequestContext, resolve_overlaps
 from lono_gateway.pipeline.engine import SecurityPipeline
 from lono_gateway.secretsynth import generate_fake_secret, is_synthetic, remember_synthetic
 from lono_gateway.settings import SecretRule, SecretsConfig, SecurityConfig
@@ -101,6 +101,16 @@ def test_popular_provider_tokens_are_detected() -> None:
     for expected_kind, value in samples.items():
         kinds = [detection.kind for detection in detector.scan(value)]
         assert expected_kind in kinds, f"{expected_kind} not detected in {value!r}"
+
+
+def test_named_pattern_wins_over_entropy_in_env_assignment() -> None:
+    # ``RUNPOD_API_KEY=rpa_...`` is a single high-entropy run because '=' is in
+    # the entropy token charset; the precise RUNPOD_API_KEY match must win so the
+    # value is masked rather than merely flagged.
+    text = "RUNPOD_API_KEY=rpa_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0u1"
+    resolved = resolve_overlaps(_detector().scan(text))
+    assert [detection.kind for detection in resolved] == ["RUNPOD_API_KEY"]
+    assert resolved[0].suggested == "mask"
 
 
 def test_custom_regex_rule_honors_action_override() -> None:

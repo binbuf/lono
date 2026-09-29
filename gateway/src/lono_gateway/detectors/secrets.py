@@ -313,9 +313,22 @@ class SecretDetector:
                         value=value,
                     )
                 )
-        if self.cfg.entropy:
-            found.extend(self._entropy_scan(text))
+        # Named patterns and user rules are precise; run them first so the
+        # speculative entropy heuristic can yield to them. An entropy token can
+        # span a wider region than the credential itself (e.g.
+        # ``RUNPOD_API_KEY=rpa_...`` is one high-entropy run because ``=`` is in
+        # the token charset), and would otherwise win overlap resolution purely
+        # by starting earlier.
         found.extend(self._custom_scan(text))
+        if self.cfg.entropy:
+            named_spans = [(detection.start, detection.end) for detection in found]
+            for detection in self._entropy_scan(text):
+                if any(
+                    not (detection.end <= start or detection.start >= end)
+                    for start, end in named_spans
+                ):
+                    continue
+                found.append(detection)
         return found
 
     def _custom_scan(self, text: str) -> list[Detection]:
