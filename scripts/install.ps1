@@ -116,7 +116,11 @@ Write-Host @"
       "models": {
         "deepseek-v4.1-flash": { "name": "DeepSeek V4.1 Flash" },
         "gpt-4o-mini": { "name": "GPT-4o mini" },
-        "claude-sonnet-4": { "name": "Claude Sonnet 4" }
+        "claude-sonnet-4": { "name": "Claude Sonnet 4" },
+        "deepinfra-deepseek-v4-flash": { "name": "DeepInfra DeepSeek V4 Flash" },
+        "lithos-kimi-k3": { "name": "Lithos Kimi K3" },
+        "morph-kimi-k3": { "name": "Morph Kimi K3" },
+        "openrouter-claude-sonnet-4": { "name": "OpenRouter Claude Sonnet 4" }
       }
     }
   }

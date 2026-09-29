@@ -85,8 +85,9 @@ docker compose up -d
 ```
 
 The installer generates `.env` with fresh secrets, pulls images, starts the
-stack and prints your OpenCode configuration. Add provider keys to `.env`
-(`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, ...) and restart:
+stack and prints your OpenCode configuration. Add provider keys to `.env` —
+either as literal values or mapped from your system environment
+(`DEEPINFRA_API_KEY=${DEEPINFRA_API_KEY:-}`) — and restart:
 
 ```bash
 docker compose up -d
@@ -212,6 +213,45 @@ model_list:
       model: openai/gpt-4o          # provider-qualified LiteLLM model
       api_key: os.environ/OPENAI_API_KEY
 ```
+
+#### Keys from your system environment (instead of `.env`)
+
+Every provider key can be a literal value in `.env` **or** a mapping from your
+system environment, so you never have to copy the secret into the file:
+
+```dotenv
+# either of these works
+OPENAI_API_KEY=sk-...
+OPENAI_API_KEY=${OPENAI_API_KEY:-}   # read $OPENAI_API_KEY from the system env
+```
+
+`${VAR:-}` is resolved by Compose from the shell environment at `docker compose`
+time; when `VAR` is unset the value is empty. Precedence is system environment
+first, then `.env`, so an exported key always wins over a stale value in the
+file. The same pattern works for any variable in `.env` (provider keys,
+`*_API_BASE`, etc.).
+
+#### OpenAI-compatible providers
+
+DeepInfra, LithosAI, Morph and OpenRouter ship as ready aliases in
+`config/litellm.yaml` (DEEPINFRA / LITHOSAI / MORPH / OPENROUTER keys above).
+OpenRouter uses LiteLLM's native `openrouter/` provider; the rest use the
+OpenAI-compatible `openai/<upstream-id>` + `api_base` shape. Any other
+OpenAI-compatible provider follows the same shape — a model block with
+`openai/<upstream-id>`, an `api_base`, and a key read from the environment:
+
+```yaml
+model_list:
+  - model_name: my-provider-model
+    litellm_params:
+      model: openai/<upstream-model-id>
+      api_base: os.environ/MY_PROVIDER_API_BASE   # e.g. https://api.example.com/v1
+      api_key: os.environ/MY_PROVIDER_API_KEY
+```
+
+Add the matching lines to `.env` (mapping the key from your system env if you
+like) and `docker compose restart litellm`. Model names are whatever your
+clients send; the `model_name` is the alias Lono exposes.
 
 ### Replacement lists (make fakes fit your world)
 

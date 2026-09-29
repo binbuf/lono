@@ -1,9 +1,18 @@
-# LiteLLM provider routing. Provider API keys come from the environment (.env).
+# LiteLLM provider routing. Provider API keys come from the environment.
+#
+# A key can be a literal in .env, or a mapping from your system environment
+# (e.g. DEEPINFRA_API_KEY=${DEEPINFRA_API_KEY:-} in .env) so the secret never
+# lands in the file. Either way it reaches this config as an env var, which
+# `os.environ/VAR` reads here.
 #
 # Any model you declare here is reachable through Lono by its model_name.
 # Add or edit aliases to match the model names your clients use.
+#
+# Native providers use "<provider>/<model>". Any OTHER OpenAI-compatible
+# provider uses "openai/<upstream-model-id>" plus an api_base and api_key.
 
 model_list:
+  # --- DeepSeek (native) ---
   - model_name: deepseek-v4.1-flash
     litellm_params:
       model: deepseek/deepseek-chat
@@ -14,6 +23,7 @@ model_list:
       model: deepseek/deepseek-chat
       api_key: os.environ/DEEPSEEK_API_KEY
 
+  # --- OpenAI ---
   - model_name: gpt-4o-mini
     litellm_params:
       model: openai/gpt-4o-mini
@@ -24,6 +34,7 @@ model_list:
       model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
+  # --- Anthropic ---
   - model_name: claude-sonnet-4
     litellm_params:
       model: anthropic/claude-sonnet-4-20250514
@@ -34,7 +45,78 @@ model_list:
       model: anthropic/claude-opus-4-20250514
       api_key: os.environ/ANTHROPIC_API_KEY
 
-  # Local Ollama example (uncomment and set OLLAMA_API_BASE if used)
+  # --- DeepInfra (OpenAI-compatible) ---
+  # https://deepinfra.com/docs/openai_api — any model from their catalog.
+  - model_name: deepinfra-deepseek-v4-flash
+    litellm_params:
+      model: openai/deepseek-ai/DeepSeek-V4-Flash-0731
+      api_base: https://api.deepinfra.com/v1/openai
+      api_key: os.environ/DEEPINFRA_API_KEY
+
+  - model_name: deepinfra-llama-3.3-70b
+    litellm_params:
+      model: openai/meta-llama/Llama-3.3-70B-Instruct
+      api_base: https://api.deepinfra.com/v1/openai
+      api_key: os.environ/DEEPINFRA_API_KEY
+
+  # --- LithosAI (OpenAI-compatible) ---
+  # https://docs.lithosai.com — model ids look like "<author>/<Model>".
+  - model_name: lithos-kimi-k3
+    litellm_params:
+      model: openai/moonshotai/Kimi-K3
+      api_base: https://api.lithosai.cloud/v1
+      api_key: os.environ/LITHOSAI_API_KEY
+
+  - model_name: lithos-deepseek-v4.1-flash
+    litellm_params:
+      model: openai/deepseek-ai/DeepSeek-V4.1-Flash
+      api_base: https://api.lithosai.cloud/v1
+      api_key: os.environ/LITHOSAI_API_KEY
+
+  # --- Morph (OpenAI-compatible) ---
+  # https://docs.morphllm.com — chat models plus specialized tools.
+  - model_name: morph-kimi-k3
+    litellm_params:
+      model: openai/morph-kimik3
+      api_base: https://api.morphllm.com/v1
+      api_key: os.environ/MORPH_API_KEY
+
+  - model_name: morph-v3-fast
+    litellm_params:
+      model: openai/morph-v3-fast
+      api_base: https://api.morphllm.com/v1
+      api_key: os.environ/MORPH_API_KEY
+
+  # --- OpenRouter (native LiteLLM provider; OpenAI-compatible) ---
+  # https://openrouter.ai/docs — model slugs are "<vendor>/<model>".
+  - model_name: openrouter-claude-sonnet-4
+    litellm_params:
+      model: openrouter/anthropic/claude-sonnet-4
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: openrouter-gpt-4o
+    litellm_params:
+      model: openrouter/openai/gpt-4o
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: openrouter-deepseek-chat
+    litellm_params:
+      model: openrouter/deepseek/deepseek-chat
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # --- Any other OpenAI-compatible provider ---
+  # Copy this block per model. Point api_base and api_key at env vars so the
+  # endpoint and secret stay out of this file (set them in .env, e.g.
+  #   MY_PROVIDER_API_BASE=https://api.example.com/v1
+  #   MY_PROVIDER_API_KEY=${MY_PROVIDER_API_KEY:-}
+  # ):
+  # - model_name: my-provider-model
+  #   litellm_params:
+  #     model: openai/<upstream-model-id>
+  #     api_base: os.environ/MY_PROVIDER_API_BASE
+  #     api_key: os.environ/MY_PROVIDER_API_KEY
+
+  # --- Local Ollama example (uncomment and set OLLAMA_API_BASE if used) ---
   # - model_name: llama3.1
   #   litellm_params:
   #     model: ollama/llama3.1
