@@ -41,6 +41,7 @@ _ALLOWED: dict[str, Any] = {
             "entropy_threshold",
             "entropy_min_length",
             "entropy_action",
+            "custom",
         },
         "pii": {
             "enabled",
@@ -231,3 +232,29 @@ class ConfigManager:
 
     def validate_substitution(self, body: dict[str, Any]) -> Substitution:
         return Substitution.model_validate(body)
+
+    # ---------------------------------------------------------- secret rules
+
+    def list_secret_rules(self) -> list[dict[str, Any]]:
+        return [rule.model_dump(mode="json") for rule in self.cfg.detectors.secrets.custom]
+
+    def add_secret_rule(self, body: dict[str, Any]) -> dict[str, Any]:
+        if not body.get("id"):
+            body = {**body, "id": uuid4().hex[:12]}
+        rules = [rule.model_dump(mode="json") for rule in self.cfg.detectors.secrets.custom]
+        rules.append(body)
+        self.update({"detectors": {"secrets": {"custom": rules}}})
+        return next(
+            rule.model_dump(mode="json")
+            for rule in self.cfg.detectors.secrets.custom
+            if rule.id == body["id"]
+        )
+
+    def remove_secret_rule(self, rule_id: str) -> bool:
+        rules = [rule for rule in self.cfg.detectors.secrets.custom if rule.id != rule_id]
+        if len(rules) == len(self.cfg.detectors.secrets.custom):
+            return False
+        self.update(
+            {"detectors": {"secrets": {"custom": [rule.model_dump(mode="json") for rule in rules]}}}
+        )
+        return True

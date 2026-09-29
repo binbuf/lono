@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
@@ -11,6 +12,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field, ValidationError
 
 from lono_gateway.models import normalize_key
+from lono_gateway.settings import SecretRule
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -238,6 +240,55 @@ def delete_substitution(
     if not request.app.state.config_manager.remove_substitution(substitution_id):
         raise HTTPException(status_code=404, detail="substitution not found")
     return {"deleted": True, "id": substitution_id}
+
+
+# ------------------------------------------------------------ secret rules
+
+
+class SecretRuleRequest(BaseModel):
+    id: str | None = None
+    kind: str = "CUSTOM_SECRET"
+    enabled: bool = True
+    action: Literal["mask", "flag", "block"] | None = None
+    match: Literal["regex", "word", "substring", "env"] = "regex"
+    pattern: str = ""
+    env_names: list[str] = Field(default_factory=list)
+    case_sensitive: bool = True
+    note: str = ""
+
+
+@router.get("/secret-rules")
+def list_secret_rules(request: Request, _: None = Depends(require_admin)) -> dict[str, Any]:
+    return {"items": request.app.state.config_manager.list_secret_rules()}
+
+
+@router.post("/secret-rules")
+def create_secret_rule(
+    request: Request, body: SecretRuleRequest, _: None = Depends(require_admin)
+) -> dict[str, Any]:
+    try:
+        rule = SecretRule.model_validate(body.model_dump(exclude_none=True))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    if rule.match == "env":
+        if not [name for name in rule.env_names if name.strip()]:
+            raise HTTPException(status_code=422, detail="at least one env var name is required")
+    else:
+        if not rule.pattern:
+            raise HTTPException(status_code=422, detail="a pattern is required")
+        if rule.match == "regex":
+            try:
+                re.compile(rule.pattern)
+            except re.error as exc:
+                raise HTTPException(status_code=422, detail=f"invalid regex: {exc}") from exc
+    return request.app.state.config_manager.add_secret_rule(rule.model_dump(mode="json"))
+
+
+@router.delete("/secret-rules/{rule_id}")
+def delete_secret_rule(request: Request, rule_id: str, _: None = Depends(require_admin)) -> dict[str, Any]:
+    if not request.app.state.config_manager.remove_secret_rule(rule_id):
+        raise HTTPException(status_code=404, detail="secret rule not found")
+    return {"deleted": True, "id": rule_id}
 
 
 # ------------------------------------------------------------------- tools

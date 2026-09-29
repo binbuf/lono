@@ -17,6 +17,19 @@ detectors:
     entropy_threshold: 4.2
     entropy_min_length: 24
     entropy_action: flag # high-entropy strings are noisy; flag by default
+    # Console-managed custom detection rules (exact keys, env var names, or
+    # regex). Managed from the Substitutions page under "Secret detection
+    # rules". Each rule may override the action (mask | flag | block).
+    # custom:
+    #   - kind: RUNPOD_API_KEY
+    #     match: env            # regex | word | substring | env
+    #     env_names: [RUNPOD_API_KEY]
+    #     action: mask
+    #   - kind: ACME_KEY
+    #     match: regex
+    #     pattern: "\\bacme_[A-Za-z0-9]{16}\\b"
+    #     action: mask
+    custom: []
 
   pii:
     enabled: false # coding workload: PII false positives mangle code identifiers

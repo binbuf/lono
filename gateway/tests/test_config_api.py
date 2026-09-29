@@ -74,6 +74,55 @@ def test_substitution_swaps_and_rehydrates(client, upstream) -> None:
     assert client.delete(f"/audit/substitutions/{created.json()['id']}", headers=ADMIN).status_code == 404
 
 
+def test_secret_rule_masks_custom_key(client, upstream) -> None:
+    created = client.post(
+        "/audit/secret-rules",
+        json={"kind": "ACME_KEY", "match": "regex", "pattern": r"\bacme_[A-Za-z0-9]{16}\b", "action": "mask"},
+        headers=ADMIN,
+    )
+    assert created.status_code == 200
+    rule_id = created.json()["id"]
+    assert rule_id
+
+    seen: dict[str, str] = {}
+
+    def responder(request, parsed):
+        seen["content"] = parsed["messages"][0]["content"]
+        return httpx.Response(
+            200,
+            json={
+                "id": "x",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                ],
+            },
+        )
+
+    upstream.responder = responder
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "x", "messages": [{"role": "user", "content": "key acme_ABCDEFGHIJKLMNOP"}]},
+        headers={"authorization": "Bearer x"},
+    )
+    assert response.status_code == 200
+    assert "acme_ABCDEFGHIJKLMNOP" not in seen["content"]
+
+    items = client.get("/audit/secret-rules", headers=ADMIN).json()["items"]
+    assert any(item["kind"] == "ACME_KEY" for item in items)
+
+    assert client.delete(f"/audit/secret-rules/{rule_id}", headers=ADMIN).status_code == 200
+    assert client.delete(f"/audit/secret-rules/{rule_id}", headers=ADMIN).status_code == 404
+
+
+def test_secret_rule_rejects_invalid_regex(client) -> None:
+    response = client.post(
+        "/audit/secret-rules",
+        json={"kind": "BROKEN", "match": "regex", "pattern": "([unclosed"},
+        headers=ADMIN,
+    )
+    assert response.status_code == 422
+
+
 def test_runtime_config_persists_and_reloads(tmp_path) -> None:
     path = tmp_path / "runtime_config.json"
     cfg = SecurityConfig()

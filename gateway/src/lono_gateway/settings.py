@@ -53,6 +53,31 @@ def _expand_env(text: str) -> str:
     return _ENV_RE.sub(_sub, text)
 
 
+class SecretRule(BaseModel):
+    """A user-defined secret detection rule managed from the console.
+
+    ``match`` selects how ``pattern`` is interpreted:
+
+    * ``regex`` / ``word`` / ``substring`` — match the literal text directly.
+    * ``env`` — treat entries in ``env_names`` as environment-variable names and
+      detect the value assigned to them (``NAME=value``, ``"NAME": "value"`` …).
+
+    ``action`` overrides ``detectors.secrets.action`` for this rule only; when
+    unset the detector default applies. Custom rules are high confidence (they
+    are user-authored) so they never fall back to the noisy entropy heuristic.
+    """
+
+    id: str = ""
+    kind: str = "CUSTOM_SECRET"
+    enabled: bool = True
+    action: Literal["mask", "flag", "block"] | None = None
+    match: Literal["regex", "word", "substring", "env"] = "regex"
+    pattern: str = ""
+    env_names: list[str] = Field(default_factory=list)
+    case_sensitive: bool = True
+    note: str = ""
+
+
 class SecretsConfig(BaseModel):
     enabled: bool = True
     action: Literal["mask", "flag", "block"] = "mask"
@@ -60,6 +85,7 @@ class SecretsConfig(BaseModel):
     entropy_threshold: float = 4.2
     entropy_min_length: int = 24
     entropy_action: Literal["flag", "mask"] = "flag"
+    custom: list[SecretRule] = Field(default_factory=list)
 
 
 class PiiConfig(BaseModel):

@@ -86,6 +86,7 @@ class SecurityPipeline:
         precompile patterns (watchlist, substitutions) and the replacement pools
         need an explicit rebuild after a runtime config change.
         """
+        self.secrets = SecretDetector(self.cfg.detectors.secrets)
         self.watchlist = WatchlistDetector(self.cfg.watchlist)
         self.substitutions = SubstitutionDetector(self.cfg.substitutions)
         self.pools = build_pools(self.cfg.pseudonymization)

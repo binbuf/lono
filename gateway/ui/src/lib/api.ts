@@ -143,6 +143,18 @@ export interface Override {
   active: boolean;
 }
 
+export interface SecretRule {
+  id: string;
+  kind: string;
+  enabled: boolean;
+  action: "mask" | "flag" | "block" | null;
+  match: "regex" | "word" | "substring" | "env";
+  pattern: string;
+  env_names: string[];
+  case_sensitive: boolean;
+  note: string;
+}
+
 export interface Substitution {
   id: string;
   pattern: string;
