@@ -192,7 +192,13 @@
                     }}>view all {item.changes_count}</button
                   >
                 {/if}
-                {#if !changes.length}<span class="muted">No Changes</span>{/if}
+                {#if !changes.length}
+                  <span class="muted">
+                    {item.categories?.length
+                      ? `No rewrites · ${item.categories.reduce((sum, cat) => sum + cat.count, 0)} detected`
+                      : "No changes"}
+                  </span>
+                {/if}
               </div>
               {#if item.categories?.length}
                 <div class="cat-row">
@@ -200,6 +206,7 @@
                     <button
                       class="cat"
                       class:transformed={TRANSFORMED.has(cat.action)}
+                      class:flagged={!TRANSFORMED.has(cat.action)}
                       title={`${cat.action} × ${cat.count} — click to filter`}
                       onclick={(e) => {
                         e.stopPropagation();

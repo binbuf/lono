@@ -25,6 +25,9 @@
   async function load(): Promise<void> {
     try {
       record = await api.get<RequestDetail>(`/audit/requests/${id}`);
+      const all = record.findings ?? [];
+      // Surface detections immediately when nothing was actually rewritten.
+      if (!all.some((f) => TRANSFORMED.has(f.action)) && all.length) tab = "detections";
       const toolData = await api.get<{ items: ToolEvent[] }>(`/audit/tools?request_id=${id}&limit=200`);
       tools = toolData.items;
     } catch (error) {
