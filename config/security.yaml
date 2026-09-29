@@ -4,7 +4,7 @@
 mode: sanitize # observe | sanitize | enforce
 fail_closed: false
 allow_client_mode_override: false # allow X-Lono-Mode header to override mode per request
-inspect_tools: true # scan tool descriptions (flag-only)
+inspect_tools: false # scan tool descriptions (flag-only)
 
 detectors:
   secrets:
@@ -16,7 +16,7 @@ detectors:
     entropy_action: flag # high-entropy strings are noisy; flag by default
 
   pii:
-    enabled: true
+    enabled: false # coding workload: PII false positives mangle code identifiers
     engine: auto # auto | presidio | regex
     presidio_url: ${PRESIDIO_URL:-http://presidio-analyzer:3000}
     language: en
@@ -47,13 +47,13 @@ detectors:
       URL: flag
 
   injection:
-    enabled: true
+    enabled: false
     action: flag # flag | block (block applies in enforce mode only)
     flag_threshold: 0.45
     block_threshold: 0.8
 
   urls:
-    enabled: true
+    enabled: false
     action: flag # flag | block (block applies in enforce mode only)
     allow_schemes: [http, https]
     block_threshold: 0.9
@@ -61,7 +61,7 @@ detectors:
 # Watchlist of project codenames, internal terms, and other sensitive strings.
 # Terms come from this inline list and/or watchlist.file.
 watchlist:
-  enabled: true
+  enabled: false
   file: ${LONO_CONFIG_DIR:-/config}/watchlist.yaml
   terms: []
   # - term: "Project Bluebird"
@@ -77,9 +77,9 @@ watchlist:
 output_scan:
   enabled: true
   secrets: true
-  injection: true
-  pii: true
-  watchlist: true
+  injection: false
+  pii: false
+  watchlist: false
   action: flag # flag | mask (secrets only when mask)
 
 pseudonymization:

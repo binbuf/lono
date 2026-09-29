@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from lono_gateway.audit.store import AuditStore
 
 
@@ -88,4 +90,43 @@ def test_stats(tmp_path) -> None:
     stats = store.stats()
     assert stats["requests"] == 1
     assert stats["findings"] == 2
+    store.close()
+
+
+def test_list_and_get_summarize_changes(tmp_path) -> None:
+    store = AuditStore(str(tmp_path / "audit.db"))
+    store.put_mapping(
+        scope="session:s1",
+        entity_type="PERSON",
+        original_key="steve",
+        original="Steve",
+        pseudonym="Carol",
+    )
+    findings = [
+        {"detector": "pii.presidio", "kind": "PERSON", "start": 0, "end": 5, "score": 0.9,
+         "action": "pseudonymized", "preview": "hi «…» there", "replacement": "Carol"},
+        {"detector": "pii.regex", "kind": "EMAIL_ADDRESS", "start": 6, "end": 10, "score": 0.9,
+         "action": "flagged", "preview": "x", "replacement": None},
+        {"detector": "secrets", "kind": "AWS_ACCESS_KEY_ID", "start": 11, "end": 20, "score": 0.9,
+         "action": "masked", "preview": "y", "replacement": "[REDACTED:AWS_ACCESS_KEY_ID]"},
+    ]
+    _begin(store, "r1", session_id="s1", findings_json=json.dumps(findings), findings_count=3)
+    store.complete_request("r1", status="completed", http_status=200)
+
+    item = store.list_requests()["items"][0]
+    assert item["changes_count"] == 2  # flagged finding is not a change
+    assert item["changes_truncated"] is False
+    by_kind = {change["kind"]: change for change in item["changes"]}
+    assert by_kind["PERSON"]["before"] == "Steve"
+    assert by_kind["PERSON"]["after"] == "Carol"
+    assert by_kind["AWS_ACCESS_KEY_ID"]["before"] is None
+    assert by_kind["AWS_ACCESS_KEY_ID"]["after"] == "[REDACTED:AWS_ACCESS_KEY_ID]"
+    assert "findings_json" not in item
+
+    record = store.get_request("r1")
+    assert record is not None
+    person = next(f for f in record["findings"] if f["kind"] == "PERSON")
+    assert person["before"] == "Steve"
+    masked = next(f for f in record["findings"] if f["kind"] == "AWS_ACCESS_KEY_ID")
+    assert masked["before"] is None
     store.close()

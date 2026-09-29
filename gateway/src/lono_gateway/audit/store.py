@@ -57,8 +57,13 @@ _COMPLETE_FIELDS = {
 _SUMMARY_COLUMNS = (
     "id, session_id, project, mode, api_shape, method, path, model, provider, stream, status, "
     "http_status, blocked, error, created_at, completed_at, latency_ms, prompt_tokens, "
-    "completion_tokens, total_tokens, cost_usd, findings_count"
+    "completion_tokens, total_tokens, cost_usd, findings_count, findings_json"
 )
+
+# Actions that actually rewrote text; everything else (flag/observed/allow) is noise
+# for the console's "what changed" view.
+_TRANSFORMED_ACTIONS = {"pseudonymized", "masked", "stripped"}
+_MAX_CHANGES = 20
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -168,6 +173,53 @@ def _fts_query(raw: str) -> str:
     return " AND ".join(f'"{term}"' for term in terms)
 
 
+def _parse_findings(findings_json: str | None) -> list[dict[str, Any]]:
+    if not findings_json:
+        return []
+    try:
+        data = json.loads(findings_json)
+    except (ValueError, TypeError):
+        return []
+    return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+
+
+def _change_before(finding: dict[str, Any], reverse: dict[str, str]) -> str | None:
+    if finding.get("action") != "pseudonymized":
+        return None
+    replacement = finding.get("replacement")
+    return reverse.get(replacement) if replacement else None
+
+
+def _summarize_changes(
+    findings: list[dict[str, Any]], reverse: dict[str, str]
+) -> tuple[list[dict[str, Any]], int]:
+    """Reduce findings to deduped, bounded before/after changes for the log list."""
+    changes: list[dict[str, Any]] = []
+    seen: set[tuple] = set()
+    total = 0
+    for finding in findings:
+        if finding.get("action") not in _TRANSFORMED_ACTIONS:
+            continue
+        total += 1
+        before = _change_before(finding, reverse)
+        after = finding.get("replacement")
+        key = (finding.get("kind"), before, after)
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(changes) < _MAX_CHANGES:
+            changes.append(
+                {
+                    "kind": finding.get("kind") or "",
+                    "action": finding.get("action"),
+                    "before": before,
+                    "after": after,
+                    "preview": finding.get("preview") or "",
+                }
+            )
+    return changes, total
+
+
 class AuditStore:
     def __init__(self, path: str, retention_days: int = 0) -> None:
         self.path = Path(path)
@@ -229,7 +281,19 @@ class AuditStore:
                 except (ValueError, TypeError):
                     record[column.removesuffix("_json")] = None
         record["has_original"] = bool(record.get("request_original"))
+        findings = record.get("findings")
+        if isinstance(findings, list) and findings:
+            reverse = self._reverse_for_session(record.get("session_id"))
+            for finding in findings:
+                if isinstance(finding, dict):
+                    finding["before"] = _change_before(finding, reverse)
         return record
+
+    def _reverse_for_session(self, session_id: str | None) -> dict[str, str]:
+        scopes = ["global"]
+        if session_id:
+            scopes.insert(0, f"session:{session_id}")
+        return self.reverse_mappings(scopes)
 
     def list_requests(
         self,
@@ -280,7 +344,21 @@ class AuditStore:
                 "ORDER BY r.created_at DESC LIMIT ? OFFSET ?",
                 (*params, limit, max(0, offset)),
             ).fetchall()
-        return {"total": total, "limit": limit, "offset": max(0, offset), "items": [dict(r) for r in rows]}
+        reverse_by_session = {
+            row["session_id"]: self._reverse_for_session(row["session_id"])
+            for row in rows
+            if row["session_id"]
+        }
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            findings = _parse_findings(item.pop("findings_json", None))
+            changes, changed_total = _summarize_changes(findings, reverse_by_session.get(item["session_id"], {}))
+            item["changes"] = changes
+            item["changes_count"] = changed_total
+            item["changes_truncated"] = changed_total > len(changes)
+            items.append(item)
+        return {"total": total, "limit": limit, "offset": max(0, offset), "items": items}
 
     def list_sessions(self, limit: int = 100) -> list[dict[str, Any]]:
         with self._lock:
