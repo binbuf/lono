@@ -6,6 +6,12 @@ export interface Change {
   preview: string | null;
 }
 
+export interface FindingCategory {
+  kind: string;
+  action: string;
+  count: number;
+}
+
 export interface RequestSummary {
   id: string;
   session_id: string | null;
@@ -31,6 +37,7 @@ export interface RequestSummary {
   changes: Change[];
   changes_count: number;
   changes_truncated: boolean;
+  categories: FindingCategory[];
 }
 
 export interface Finding {

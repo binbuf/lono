@@ -138,6 +138,23 @@ def _looks_like_identifier(token: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token))
 
 
+_CODE_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:[-.][A-Za-z_][A-Za-z0-9_]*)+")
+
+
+def _looks_like_code_name(value: str) -> bool:
+    """A hyphenated/dotted name with no digits: PowerShell cmdlets, module paths.
+
+    Examples: ``Get-LocalEnvValue`` (a cmdlet call, not a secret),
+    ``secrets.token_urlsafe``, ``os.path.join``. Real credentials almost always
+    carry a digit, so requiring the token to be digit-free keeps detection
+    narrow while stopping config code from being rewritten.
+    """
+    text = (value or "").strip()
+    if not text or any(char.isdigit() for char in text):
+        return False
+    return bool(_CODE_NAME_RE.fullmatch(text))
+
+
 def _is_screaming_snake(token: str) -> bool:
     """Env-var names such as LONO_PSEUDONYM_SECRET are names, not values."""
     return bool(re.fullmatch(r"[A-Z][A-Z0-9_]*", token))
@@ -181,9 +198,12 @@ class SecretDetector:
                 value = text[start:end]
                 if is_synthetic(value):
                     continue
-                # Assignment-style patterns fire on config placeholders and
-                # code expressions rather than real credentials.
-                if kind == "PASSWORD_ASSIGNMENT" and _looks_like_placeholder(value):
+                # Assignment-style patterns fire on config placeholders, code
+                # expressions and function/cmdlet names rather than real
+                # credentials.
+                if kind == "PASSWORD_ASSIGNMENT" and (
+                    _looks_like_placeholder(value) or _looks_like_code_name(value)
+                ):
                     continue
                 found.append(
                     Detection(

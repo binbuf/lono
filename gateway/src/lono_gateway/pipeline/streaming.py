@@ -40,6 +40,7 @@ class StreamTranslator:
         self.raw_truncated = False
         self.chunk_count = 0
         self.done = False
+        self._pending_done: bytes | None = None
         self.usage: dict[str, Any] = {}
         self._openai_choices: dict[int, dict[str, Any]] = {}
         self._anthropic_message: dict[str, Any] = {}
@@ -62,12 +63,19 @@ class StreamTranslator:
         return output
 
     def flush(self) -> tuple[bytes | None, StreamOutcome]:
-        extra: bytes | None = None
+        extra_parts: list[bytes] = []
         tail, self._buffer = self._buffer, b""
         if tail.strip():
             transformed = self._process_block(tail)
             if transformed:
-                extra = transformed
+                extra_parts.append(transformed)
+        # Any pseudonym prefix held back by a stream rehydrator will never be
+        # completed now that the stream is over; emit it instead of dropping it.
+        extra_parts.extend(self._residual_events())
+        if self._pending_done:
+            extra_parts.append(self._pending_done)
+            self._pending_done = None
+        extra = b"".join(extra_parts) or None
         assembled = self._assembled()
         raw_text = "\n".join(self._raw_parts)
         return extra, StreamOutcome(
@@ -116,8 +124,11 @@ class StreamTranslator:
         data = "\n".join(data_lines)
         self._record_raw(data)
         if data.strip() == "[DONE]":
+            # Hold the sentinel until flush so any rehydrator-held tail can be
+            # emitted before the client is told the stream is over.
             self.done = True
-            return block + b"\n\n"
+            self._pending_done = block + b"\n\n"
+            return b""
 
         try:
             payload = json.loads(data)
@@ -149,6 +160,96 @@ class StreamTranslator:
             self.raw_truncated = True
         self._raw_parts.append(snippet)
         self._raw_len += len(snippet)
+
+    def _residual_events(self) -> list[bytes]:
+        """Emit text held back by stream rehydrators at end of stream."""
+        events: list[bytes] = []
+        for cache_key, rehydrator in self._rehydrators.items():
+            residual = rehydrator.flush()
+            if not residual:
+                continue
+            fields = cache_key[1:]
+            if self.shape == "openai.chat":
+                payload = self._openai_residual_payload(fields, residual)
+                if payload is not None:
+                    self._accumulate_openai(payload["choices"][0])
+                    events.append(self._encode_event(None, payload))
+            elif self.shape == "anthropic.messages":
+                event_name, payload = self._anthropic_residual_payload(fields, residual)
+                if payload is not None:
+                    events.append(self._encode_event(event_name, payload))
+        return events
+
+    def _openai_residual_payload(self, fields: list, residual: str) -> dict | None:
+        choice = fields[1]
+        kind = fields[2] if len(fields) > 2 else None
+        if kind == "content":
+            return {"choices": [{"index": choice, "delta": {"content": residual}}]}
+        if kind == "part":
+            part_index = fields[3] if len(fields) > 3 else 0
+            return {
+                "choices": [
+                    {
+                        "index": choice,
+                        "delta": {"content": [{"type": "text", "text": residual, "index": part_index}]},
+                    }
+                ]
+            }
+        if kind == "tool":
+            tool_index = fields[3] if len(fields) > 3 else 0
+            return {
+                "choices": [
+                    {
+                        "index": choice,
+                        "delta": {"tool_calls": [{"index": tool_index, "function": {"arguments": residual}}]},
+                    }
+                ]
+            }
+        return None
+
+    def _anthropic_residual_payload(self, fields: list, residual: str) -> tuple[str, dict | None]:
+        index = fields[1]
+        kind = fields[2] if len(fields) > 2 else None
+        if kind == "text":
+            self._append_anthropic_text(index, residual)
+            return (
+                "content_block_delta",
+                {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": residual}},
+            )
+        if kind == "thinking":
+            self._append_anthropic_field(index, "thinking", residual)
+            return (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "thinking_delta", "thinking": residual},
+                },
+            )
+        if kind == "input":
+            block = self._anthropic_blocks.setdefault(index, {"type": "tool_use", "input": {}})
+            block["_partial_json"] = block.get("_partial_json", "") + residual
+            try:
+                block["input"] = json.loads(block["_partial_json"])
+            except (ValueError, TypeError):
+                block["input"] = block["_partial_json"]
+            return (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "input_json_delta", "partial_json": residual},
+                },
+            )
+        return "", None
+
+    @staticmethod
+    def _encode_event(event_name: str | None, payload: dict) -> bytes:
+        lines = []
+        if event_name is not None:
+            lines.append(f"event: {event_name}")
+        lines.append(f"data: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}")
+        return ("\n".join(lines) + "\n\n").encode("utf-8")
 
     def _reh(self, key: tuple, *, json_escape: bool = False) -> StreamingRehydrator:
         cache_key = (json_escape, *key)
@@ -256,7 +357,9 @@ class StreamTranslator:
             index = payload.get("index", 0)
             block = self._anthropic_blocks.get(index)
             if isinstance(block, dict):
-                partial = block.pop("_partial_json", None)
+                # Keep ``_partial_json`` so a held-back tail flushed after the
+                # block stop can still be appended and re-parsed.
+                partial = block.get("_partial_json")
                 if partial:
                     try:
                         block["input"] = json.loads(partial)

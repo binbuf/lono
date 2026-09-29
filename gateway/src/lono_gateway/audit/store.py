@@ -266,6 +266,26 @@ def _summarize_changes(
     return changes, total
 
 
+def _summarize_categories(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Distinct finding categories (kind + action) with counts for the log list.
+
+    Unlike ``changes`` this keeps every detected span, including observed or
+    flagged ones that never rewrote text, so the console can surface the
+    category type for a request without opening it.
+    """
+    buckets: dict[tuple[str, str], int] = {}
+    for finding in findings:
+        kind = str(finding.get("kind") or "").strip()
+        if not kind:
+            continue
+        action = str(finding.get("action") or "").strip()
+        buckets[(kind, action)] = buckets.get((kind, action), 0) + 1
+    return [
+        {"kind": kind, "action": action, "count": count}
+        for (kind, action), count in sorted(buckets.items(), key=lambda kv: (-kv[1], kv[0][0]))
+    ]
+
+
 class AuditStore:
     def __init__(self, path: str, retention_days: int = 0) -> None:
         self.path = Path(path)
@@ -403,6 +423,7 @@ class AuditStore:
             item["changes"] = changes
             item["changes_count"] = changed_total
             item["changes_truncated"] = changed_total > len(changes)
+            item["categories"] = _summarize_categories(findings)
             items.append(item)
         return {"total": total, "limit": limit, "offset": max(0, offset), "items": items}
 

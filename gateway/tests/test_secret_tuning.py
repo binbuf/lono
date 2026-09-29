@@ -36,6 +36,19 @@ def test_real_assignment_is_still_detected() -> None:
     assert "PASSWORD_ASSIGNMENT" in kinds
 
 
+def test_assignment_skips_cmdlet_and_module_names() -> None:
+    detector = _detector()
+    text = "\n".join(
+        [
+            "$hfToken = Get-LocalEnvValue 'HF_TOKEN'",
+            "$apiKey  = Get-LocalEnvValue 'RUNPOD_API_KEY'",
+            "secret = secrets.token_urlsafe(32)",
+        ]
+    )
+    kinds = [detection.kind for detection in detector.scan(text)]
+    assert "PASSWORD_ASSIGNMENT" not in kinds
+
+
 def test_entropy_ignores_coding_context() -> None:
     detector = _detector()
     text = "\n".join(

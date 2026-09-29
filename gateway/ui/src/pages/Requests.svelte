@@ -3,8 +3,9 @@
   import type { Api, RequestSummary } from "../lib/api";
   import { go, goQuery, queryParam } from "../lib/router.svelte";
   import { fmtNumber, fmtTime, fmtDuration } from "../lib/format";
-  import ChangeChip from "../components/ChangeChip.svelte";
   import RequestDetail from "../components/RequestDetail.svelte";
+
+  const TRANSFORMED = new Set(["pseudonymized", "masked", "stripped"]);
 
   let { api, status }: { api: Api; status: (msg: string, isError?: boolean) => void } = $props();
 
@@ -50,7 +51,10 @@
       case "latency":
         return String(item.latency_ms ?? "");
       case "changes":
-        return (item.changes || []).map((c) => [c.kind, c.before, c.after].filter(Boolean).join(" ")).join(" ");
+        return [
+          ...(item.changes || []).map((c) => [c.kind, c.action, c.before, c.after].filter(Boolean).join(" ")),
+          ...(item.categories || []).map((c) => [c.kind, c.action].filter(Boolean).join(" ")),
+        ].join(" ");
       default:
         return "";
     }
@@ -115,8 +119,9 @@
   </div>
 
   <p class="muted small">
-    Red is the original text, green is what replaced it. Secret and PII values stay hidden until you reveal them.
-    Click any row to inspect all four stages.
+    Each line maps a category to its original value (red) and the obfuscated value (green); values stay hidden
+    until you reveal them. Category badges below list every detection, including ones that were only flagged.
+    Filter the changes column to narrow by category or value. Click any row to inspect all four stages.
   </p>
 
   <div class="table-scroll">
@@ -153,14 +158,12 @@
             <td class="wrap">
               <div class="changes-cell">
                 {#each shown as change, index (index)}
-                  <ChangeChip
-                    kind={change.kind}
-                    before={change.before}
-                    after={change.after}
-                    action={change.action}
-                    reveal={revealAll}
-                    onclick={() => open(item.id)}
-                  />
+                  <div class="map-row" title={change.preview || undefined}>
+                    <span class="map-kind">{change.kind}</span>
+                    <span class="map-before" class:blur={!revealAll}>{change.before ?? "…"}</span>
+                    <span class="map-arrow">→</span>
+                    <span class="map-after" class:blur={!revealAll}>{change.after ?? "(removed)"}</span>
+                  </div>
                 {/each}
                 {#if hidden > 0}
                   <button
@@ -171,8 +174,41 @@
                     }}>+{hidden} more</button
                   >
                 {/if}
+                {#if isOpen && changes.length > 6}
+                  <button
+                    class="subtle"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      expanded = { ...expanded, [item.id]: false };
+                    }}>show less</button
+                  >
+                {/if}
+                {#if item.changes_truncated}
+                  <button
+                    class="subtle"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      open(item.id);
+                    }}>view all {item.changes_count}</button
+                  >
+                {/if}
                 {#if !changes.length}<span class="muted">No Changes</span>{/if}
               </div>
+              {#if item.categories?.length}
+                <div class="cat-row">
+                  {#each item.categories as cat (cat.kind + cat.action)}
+                    <button
+                      class="cat"
+                      class:transformed={TRANSFORMED.has(cat.action)}
+                      title={`${cat.action} × ${cat.count} — click to filter`}
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        filters = { ...filters, changes: cat.kind };
+                      }}>{cat.kind}{cat.count > 1 ? `×${cat.count}` : ""}</button
+                    >
+                  {/each}
+                </div>
+              {/if}
             </td>
           </tr>
         {:else}

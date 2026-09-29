@@ -123,6 +123,10 @@ def test_list_and_get_summarize_changes(tmp_path) -> None:
     assert by_kind["AWS_ACCESS_KEY_ID"]["after"] == "[REDACTED:AWS_ACCESS_KEY_ID]"
     assert "findings_json" not in item
 
+    by_cat = {category["kind"]: category for category in item["categories"]}
+    assert set(by_cat) == {"PERSON", "EMAIL_ADDRESS", "AWS_ACCESS_KEY_ID"}
+    assert by_cat["EMAIL_ADDRESS"] == {"kind": "EMAIL_ADDRESS", "action": "flagged", "count": 1}
+
     record = store.get_request("r1")
     assert record is not None
     person = next(f for f in record["findings"] if f["kind"] == "PERSON")
