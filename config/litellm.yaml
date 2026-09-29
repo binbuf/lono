@@ -1,0 +1,51 @@
+# LiteLLM provider routing. Provider API keys come from the environment (.env).
+#
+# Any model you declare here is reachable through Lono by its model_name.
+# Add or edit aliases to match the model names your clients use.
+
+model_list:
+  - model_name: deepseek-v4.1-flash
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  - model_name: deepseek-chat
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: claude-sonnet-4
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: claude-opus-4
+    litellm_params:
+      model: anthropic/claude-opus-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # Local Ollama example (uncomment and set OLLAMA_API_BASE if used)
+  # - model_name: llama3.1
+  #   litellm_params:
+  #     model: ollama/llama3.1
+  #     api_base: os.environ/OLLAMA_API_BASE
+
+litellm_settings:
+  drop_params: true
+  # Provider-side traces in Langfuse (the Lono gateway emits its own 4-stage trace).
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
+  request_timeout: 900
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

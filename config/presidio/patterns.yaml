@@ -1,0 +1,33 @@
+# Custom recognizer patterns loaded by the Lono gateway and merged with
+# Presidio's built-in PII analysis. Add internal identifiers here.
+#
+# Each recognizer:
+#   entity:   entity type surfaced in findings and mapped via pii.actions
+#   regex:    Python regular expression
+#   score:    confidence 0..1
+#   action:   pseudonymize | mask | flag (optional; default pseudonymize)
+
+recognizers:
+  - name: employee-id
+    entity: EMPLOYEE_ID
+    regex: '\bEMP-\d{6}\b'
+    score: 0.9
+    action: pseudonymize
+
+  - name: internal-project-code
+    entity: INTERNAL_PROJECT_CODE
+    regex: '\b(?:PROJ|INIT|ENG)-\d{4,6}\b'
+    score: 0.85
+    action: pseudonymize
+
+  - name: internal-ticket
+    entity: INTERNAL_TICKET
+    regex: '\b(?:JIRA|TICKET|OPS)-[A-Z]{2,6}-\d{1,6}\b'
+    score: 0.8
+    action: pseudonymize
+
+  - name: internal-hostname
+    entity: INTERNAL_HOSTNAME
+    regex: '\b[a-z0-9][a-z0-9\-]{1,40}\.(?:corp|internal|intranet)\b'
+    score: 0.8
+    action: pseudonymize

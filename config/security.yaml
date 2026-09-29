@@ -1,0 +1,110 @@
+# Lono security configuration.
+# Values support environment expansion: ${VAR} or ${VAR:-default}.
+
+mode: sanitize # observe | sanitize | enforce
+fail_closed: false
+allow_client_mode_override: false # allow X-Lono-Mode header to override mode per request
+inspect_tools: true # scan tool descriptions (flag-only)
+
+detectors:
+  secrets:
+    enabled: true
+    action: mask # mask | flag | block
+    entropy: true
+    entropy_threshold: 4.2
+    entropy_min_length: 24
+    entropy_action: flag # high-entropy strings are noisy; flag by default
+
+  pii:
+    enabled: true
+    engine: auto # auto | presidio | regex
+    presidio_url: ${PRESIDIO_URL:-http://presidio-analyzer:3000}
+    language: en
+    score_threshold: 0.4
+    timeout_s: 10
+    default_action: pseudonymize # used for entity types not listed below
+    custom_patterns_file: ${LONO_CONFIG_DIR:-/config}/presidio/patterns.yaml
+    actions:
+      EMAIL_ADDRESS: pseudonymize
+      PERSON: pseudonymize
+      PHONE_NUMBER: pseudonymize
+      LOCATION: pseudonymize
+      ORGANIZATION: pseudonymize
+      IP_ADDRESS: pseudonymize
+      NRP: pseudonymize
+      CREDIT_CARD: mask
+      US_SSN: mask
+      US_PASSPORT: mask
+      US_DRIVER_LICENSE: mask
+      MEDICAL_LICENSE: mask
+      IBAN_CODE: mask
+      DATE_TIME: flag
+      URL: flag
+
+  injection:
+    enabled: true
+    action: flag # flag | block (block applies in enforce mode only)
+    flag_threshold: 0.45
+    block_threshold: 0.8
+
+  urls:
+    enabled: true
+    action: flag # flag | block (block applies in enforce mode only)
+    allow_schemes: [http, https]
+    block_threshold: 0.9
+
+output_scan:
+  enabled: true
+  secrets: true
+  injection: true
+  pii: true
+  action: flag # flag | mask (secrets only when mask)
+
+pseudonymization:
+  secret: ${LONO_PSEUDONYM_SECRET:-}
+  stable_across_sessions: false # true = same entity maps to the same pseudonym everywhere
+
+audit:
+  enabled: true
+  sqlite_path: ${LONO_DATA_DIR:-/data}/audit.db
+  capture_original: true
+  max_payload_bytes: 20000000
+  retention_days: 0 # 0 = keep forever
+  media:
+    enabled: true
+    backend: ${LONO_MEDIA_BACKEND:-local} # local | minio
+    local_path: ${LONO_DATA_DIR:-/data}/media
+    endpoint: ${MINIO_ENDPOINT:-minio:9000}
+    access_key: ${MINIO_ACCESS_KEY:-}
+    secret_key: ${MINIO_SECRET_KEY:-}
+    secure: false
+    bucket: ${MINIO_BUCKET:-lono-media}
+    max_store_bytes: 50000000
+    fetch_remote_images: false # do not fetch remote image URLs by default
+  langfuse:
+    enabled: true # effective only when public/secret keys are present
+    host: ${LANGFUSE_HOST:-http://langfuse-web:3000}
+    public_key: ${LANGFUSE_PUBLIC_KEY:-}
+    secret_key: ${LANGFUSE_SECRET_KEY:-}
+    max_chars: 100000
+
+upstream:
+  base_url: ${LONO_UPSTREAM_URL:-http://litellm:4000}
+  timeout_s: 900
+  connect_timeout_s: 10
+  max_body_bytes: 50000000
+  forward_headers:
+    - authorization
+    - x-api-key
+    - anthropic-version
+    - anthropic-beta
+    - openai-organization
+    - openai-project
+    - content-type
+    - accept
+
+auth:
+  admin_key: ${LONO_ADMIN_KEY:-}
+  allow_unauthenticated_audit: false
+  client_keys: []
+  require_client_key: false
