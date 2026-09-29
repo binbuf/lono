@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from lono_gateway import __version__
 from lono_gateway.api import audit_api, health, proxy, ui
@@ -71,6 +72,10 @@ def create_app(
     app.include_router(health.router)
     app.include_router(proxy.router)
     app.include_router(audit_api.router)
+    # Assets must be mounted before the SPA catch-all route so hashed bundles
+    # are served instead of the index fallback.
+    if (dist := ui.dist_dir()) is not None:
+        app.mount("/ui/assets", StaticFiles(directory=dist / "assets"), name="ui-assets")
     app.include_router(ui.router)
 
     @app.exception_handler(Exception)

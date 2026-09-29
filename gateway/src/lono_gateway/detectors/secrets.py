@@ -6,6 +6,7 @@ import math
 import re
 
 from lono_gateway.models import Detection
+from lono_gateway.secretsynth import is_synthetic
 from lono_gateway.settings import SecretsConfig
 
 _SECRET_PATTERNS: list[tuple[str, re.Pattern[str], float]] = [
@@ -74,11 +75,82 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str], float]] = [
     ("BASIC_AUTH", re.compile(r"(?i)\bauthorization\s*:\s*basic\s+([A-Za-z0-9+/=]{8,})"), 0.85),
 ]
 
-_ENTROPY_TOKEN_RE = re.compile(r"[A-Za-z0-9+/=_\-]{20,}")
+_ENTROPY_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9+/=_\-])[A-Za-z0-9+/=_\-]{20,}(?![A-Za-z0-9+/=_\-])")
 _HASHY_RE = re.compile(
     r"^(?:[0-9a-fA-F]{32,}|"
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
 )
+_PLACEHOLDER_HINTS = (
+    "example",
+    "changeme",
+    "change-me",
+    "change_me",
+    "placeholder",
+    "dummy",
+    "redacted",
+    "your_",
+    "your-",
+    "yourkey",
+    "xxxx",
+    "todo",
+    "replace",
+    "insert_",
+    "sample",
+)
+_PLACEHOLDER_EXPR_PREFIXES = (
+    "os.environ",
+    "process.env",
+    "system.getenv",
+    "environ[",
+    "getenv(",
+    "config.",
+    "settings.",
+)
+_SEGMENT_SPLIT_RE = re.compile(r"[/\\=:.@]+")
+
+
+def _looks_like_placeholder(value: str) -> bool:
+    """Configuration placeholders and code expressions, not real credentials."""
+    text = (value or "").strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    if text.startswith("${") or "{" in text or "}" in text:
+        return True
+    if text.startswith("<") and text.endswith(">"):
+        return True
+    if "(" in text or ")" in text:
+        return True
+    if lowered in {"null", "none", "true", "false", "undefined", "nil"}:
+        return True
+    if lowered.startswith(_PLACEHOLDER_EXPR_PREFIXES):
+        return True
+    if any(hint in lowered for hint in _PLACEHOLDER_HINTS):
+        return True
+    # Masking with punctuation only (`****`, `....`, `-`).
+    return set(text) <= set("-*.#_ ")
+
+
+def _looks_like_identifier(token: str) -> bool:
+    """A code identifier (camelCase / snake_case) with no digits is not a secret."""
+    if any(char.isdigit() for char in token):
+        return False
+    return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token))
+
+
+def _is_screaming_snake(token: str) -> bool:
+    """Env-var names such as LONO_PSEUDONYM_SECRET are names, not values."""
+    return bool(re.fullmatch(r"[A-Z][A-Z0-9_]*", token))
+
+
+def _is_word_list(token: str) -> bool:
+    """Slash/colon/equals separated lists of words (e.g. AWS/GitHub/OpenAI)."""
+    if any(char.isdigit() for char in token):
+        return False
+    parts = [part for part in _SEGMENT_SPLIT_RE.split(token) if part]
+    if len(parts) < 2:
+        return False
+    return all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", part) for part in parts)
 
 
 def shannon_entropy(value: str) -> float:
@@ -106,6 +178,13 @@ class SecretDetector:
                 start, end = match.span(1) if match.lastindex else match.span()
                 if end <= start:
                     continue
+                value = text[start:end]
+                if is_synthetic(value):
+                    continue
+                # Assignment-style patterns fire on config placeholders and
+                # code expressions rather than real credentials.
+                if kind == "PASSWORD_ASSIGNMENT" and _looks_like_placeholder(value):
+                    continue
                 found.append(
                     Detection(
                         detector=self.name,
@@ -114,7 +193,7 @@ class SecretDetector:
                         end=end,
                         score=score,
                         suggested=self.cfg.action,
-                        value=text[start:end],
+                        value=value,
                     )
                 )
         if self.cfg.entropy:
@@ -127,11 +206,23 @@ class SecretDetector:
             token = match.group(0)
             if len(token) < self.cfg.entropy_min_length:
                 continue
-            if _HASHY_RE.match(token):
+            if is_synthetic(token) or _HASHY_RE.match(token):
+                continue
+            # Coding context is full of high-entropy-looking text that is not a
+            # credential: identifiers, SCREAMING_SNAKE env names, word lists
+            # (AWS/GitHub/OpenAI) and configuration placeholders.
+            if _looks_like_placeholder(token):
+                continue
+            if _looks_like_identifier(token) or _is_screaming_snake(token) or _is_word_list(token):
                 continue
             has_lower = any(c.islower() for c in token)
             has_upper = any(c.isupper() for c in token)
             has_digit = any(c.isdigit() for c in token)
+            # Most machine-generated secrets carry digits; a long mixed-case
+            # token without digits is allowed too, but short digit-free prose,
+            # identifiers and word lists are not.
+            if not has_digit and not (has_lower and has_upper and len(token) >= 32):
+                continue
             if sum([has_lower, has_upper, has_digit]) < 2:
                 continue
             if shannon_entropy(token) < self.cfg.entropy_threshold:

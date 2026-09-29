@@ -48,6 +48,18 @@ def stats(request: Request, _: None = Depends(require_admin)) -> dict[str, Any]:
     return request.app.state.store.stats()
 
 
+@router.get("/dashboard")
+def dashboard(
+    request: Request,
+    hours: int = Query(default=24, ge=1, le=24 * 30),
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    """Aggregated metrics for the console dashboard (trailing window)."""
+    data = request.app.state.store.dashboard(hours)
+    data["all_time"] = request.app.state.store.stats()
+    return data
+
+
 @router.get("/requests")
 def list_requests(
     request: Request,

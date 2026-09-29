@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 from lono_gateway.models import Detection, Finding, MappingRecord, normalize_key, preview_span
 from lono_gateway.pools import Pools, generate_pseudonym
+from lono_gateway.secretsynth import generate_fake_secret, remember_synthetic
 from lono_gateway.settings import PseudonymizationConfig
 
 
@@ -83,7 +84,13 @@ class Pseudonymizer:
                     )
                 )
             elif action == "mask":
-                replacement = f"[REDACTED:{det.kind}]"
+                if det.detector == "secrets":
+                    # Send a plausible but fake value; the provider must not be
+                    # able to tell the request was redacted.
+                    replacement = self._fake_secret(det.kind, original)
+                    remember_synthetic(replacement)
+                else:
+                    replacement = f"[REDACTED:{det.kind}]"
                 parts.append(replacement)
             elif action == "strip":
                 pass
@@ -107,6 +114,7 @@ class Pseudonymizer:
                     score=det.score,
                     action=finding_action,  # type: ignore[arg-type]
                     preview=preview_span(text, det.start, det.end),
+                    before=original,
                     replacement=replacement,
                 )
             )
@@ -116,6 +124,21 @@ class Pseudonymizer:
         return SubstituteResult(
             text="".join(parts), findings=findings, mappings=mappings, blocked=blocked, block_kinds=block_kinds
         )
+
+    def _fake_secret(self, entity_type: str, original: str) -> str:
+        """Deterministic, format-preserving fake for a masked secret."""
+        cache_key = ("__fake__", entity_type, normalize_key(original))
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+        digest = hmac.new(
+            self.cfg.secret.encode("utf-8"),
+            f"{self.scope}|fake|{entity_type}|{normalize_key(original)}".encode(),
+            hashlib.sha256,
+        ).digest()
+        rng = random.Random(int.from_bytes(digest[:8], "big"))
+        fake = generate_fake_secret(entity_type, original, rng)
+        self._cache[cache_key] = fake
+        return fake
 
     def _get_or_create(self, entity_type: str, original: str) -> str:
         key = normalize_key(original)

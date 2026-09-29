@@ -1,0 +1,8 @@
+ui/node_modules
+ui/dist
+src/lono_gateway/ui/dist
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+tests

@@ -13,6 +13,9 @@ __pycache__/
 dist/
 build/
 
+# Node / console build
+node_modules/
+
 # OS
 .DS_Store
 Thumbs.db

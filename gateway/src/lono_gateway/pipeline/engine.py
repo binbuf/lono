@@ -182,7 +182,10 @@ class SecurityPipeline:
 
     def _action_for(self, detection: Detection, ctx: RequestContext) -> str:
         if detection.detector == "secrets":
-            return self.cfg.detectors.secrets.action
+            # Entropy hits carry their own action (usually `flag`); named
+            # patterns carry the detector action (usually `mask`). Honor the
+            # per-detection suggestion so noisy entropy never rewrites code.
+            return detection.suggested or self.cfg.detectors.secrets.action
         if detection.detector.startswith("pii"):
             return self.cfg.detectors.pii.actions.get(
                 detection.kind, self.cfg.detectors.pii.default_action

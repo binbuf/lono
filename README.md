@@ -40,7 +40,7 @@ OpenCode / Codex / Claude / Cursor / Harness
 
 | Concern | Behavior |
 |---|---|
-| Secrets | AWS/GitHub/OpenAI/Anthropic/Stripe/JWT/private keys/connection strings + entropy heuristics. Masked before egress (`[REDACTED:...]`), never rehydrated. |
+| Secrets | Named patterns (AWS/GitHub/OpenAI/Anthropic/Stripe/JWT/private keys, connection strings) plus entropy heuristics. Named secrets are replaced with a **format-preserving fake** of the same shape (never rehydrated), so the provider cannot tell a request was redacted. Entropy heuristics only flag by default. |
 | PII | Presidio + regex/custom recognizers. Deterministic pseudonyms per session: `Steve → Bob`, `steve@corp.com → bob.smith@example.com`. Rehydrated on the way back. |
 | Prompt injection | Weighted heuristics over prompts, tool results and tool arguments. Flagged in `sanitize`, blockable in `enforce`. |
 | URLs | Scheme allowlist, private/loopback/metadata hosts (`169.254.169.254`), embedded credentials, opaque exfil-style query strings. |
@@ -48,7 +48,7 @@ OpenCode / Codex / Claude / Cursor / Harness
 | Media | Images are content-addressed (SHA-256) into MinIO or a local CAS; identical images stored once. |
 | Watchlist | Your own terms — project codenames, internal names, ticket IDs — from `config/watchlist.yaml`, with per-term action and replacement type. |
 | Allow-through | Temporarily let a category or a specific value pass unchanged (e.g. a false positive), with expiry. Managed from the console or API. |
-| Console | A local web log at `/ui` showing every finding plus the four request stages, and controls to add/revoke allow-through overrides. |
+| Console | A local SPA at `/ui`: live filtering log with reveal-able changes, per-request redaction timeline, pseudonym mappings, overrides, and a metrics dashboard. |
 | Tracing | LiteLLM and the gateway both emit traces to self-hosted Langfuse. |
 
 **Modes** (`AI_GATEWAY_MODE`, default `sanitize`):
@@ -178,6 +178,25 @@ Responses carry `x-lono-request-id` so you can jump straight to the matching
 record. Inline images are replaced in the stored JSON with
 `lono-media://sha256/<hash>` references and can be fetched from
 `GET /audit/media/{sha256}` or MinIO.
+
+### Why did my code show up as `HIGH_ENTROPY_STRING` / `PASSWORD_ASSIGNMENT`?
+
+Lono scans every string that reaches a provider, and a coding session is full of
+credential-shaped text: environment references (`api_key: ${...}`), config
+expressions (`secret = secrets.token_urlsafe(32)`), long identifiers
+(`PseudonymizationConfig`), slash word lists (`AWS/GitHub/OpenAI`) and your own
+source files. These are not secrets, so the detector ignores them:
+
+- `PASSWORD_ASSIGNMENT` skips placeholders (`${...}`, `<...>`), code
+  expressions/functions, and common dummy words.
+- `HIGH_ENTROPY_STRING` ignores identifiers, `SCREAMING_SNAKE` env names, word
+  lists and placeholder text, and requires a digit. It only **flags** by default
+  (`detectors.secrets.entropy_action`), so it never rewrites code.
+- Named patterns (real AWS/GitHub/OpenAI/... keys) still catch real credentials.
+  Those are replaced with a realistic fake, not a `[REDACTED:...]` marker.
+
+Tune the bar with `detectors.secrets.entropy_threshold`,
+`entropy_min_length`, and `entropy_action` in `config/security.yaml`.
 
 ## Configuration
 
@@ -397,12 +416,29 @@ Expired and revoked overrides are ignored automatically. Set
 
 ### The console
 
-`http://127.0.0.1:4000/ui` is a single local page (no build step, no external
-assets). Enter the admin key once; it is kept in your browser's local storage.
-It shows the live filtering log, the four stages of every request, findings
-with their action, the pseudonym mappings, and override management. The page
-shell is served without auth; every data call requires the admin key, and
-audit text is rendered as text (never HTML).
+`http://127.0.0.1:4000/ui` is a local single-page app (React + Vite). Enter the
+admin key once; it is kept in your browser's local storage. Every data call
+requires the admin key and audit text is rendered as text (never HTML). Tabs:
+
+- **Filtering log** — live requests with a per-request **changes** column. Red
+  is the original text, green is what replaced it. Secret and PII values stay
+  blurred until you click *reveal* (or tick *reveal values*); `+N more` expands
+  the full list inline.
+- **Request popout** — for any request: a redaction **timeline** (red
+  strikethrough original → green replacement, click `prev`/`next` to walk each
+  one), the annotated question and response, tool calls, and the four raw audit
+  stages.
+- **Dashboard** — Grafana/Datadog-style metrics: request/block/finding traffic,
+  tokens and cost over time, findings by category/action/detector, latency
+  percentiles, models and busiest sessions, over 1h/6h/24h/7d/30d windows.
+- **Overrides** / **Mappings** — allow-through controls and pseudonym mappings.
+
+The app is served without auth; the API needs the admin key. To rebuild the
+console after editing `gateway/ui/`:
+
+```bash
+cd gateway/ui && npm install && npm run build   # outputs into the Python package
+```
 
 ## Security notes
 
@@ -426,6 +462,14 @@ python -m venv .venv
 
 .venv/Scripts/python -m pytest gateway/tests -q
 .venv/Scripts/python -m ruff check gateway
+```
+
+Rebuild the console SPA (only needed after changing `gateway/ui/`; the
+production Docker image builds it automatically):
+
+```bash
+cd gateway/ui && npm install && npm run build
+```
 ```
 
 Run the gateway without Docker (regex PII engine, local files):
@@ -466,6 +510,7 @@ compose.yaml            full stack (gateway, litellm, presidio, langfuse, minio,
 config/                 security.yaml, litellm.yaml, presidio/patterns.yaml,
                         watchlist.yaml, lists/*.txt (replacement word lists)
 gateway/                thin Python gateway (FastAPI): pipeline, audit, proxy
+gateway/ui/             console SPA (React + Vite); built into the gateway image
 scripts/                install/start/stop for Windows (.ps1) and macOS/Linux (.sh)
 data/                   runtime state: audit.db, media CAS (gitignored)
 ```

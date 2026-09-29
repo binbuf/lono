@@ -50,8 +50,12 @@ def test_mask_action_is_irreversible(tmp_path) -> None:
         detector="secrets", kind="PASSWORD_ASSIGNMENT", start=9, end=len(text), score=0.8, suggested="mask"
     )
     result = Pseudonymizer(store, cfg, "s").substitute(text, [ResolvedDetection(detection, "mask")])
-    assert result.text == "password=[REDACTED:PASSWORD_ASSIGNMENT]"
+    original = text[len("password="):]
+    masked = result.text[len("password="):]
+    assert masked != original
+    assert len(masked) == len(original)
     assert result.findings[0].action == "masked"
+    assert result.findings[0].before == original
     assert not result.mappings
     store.close()
 

@@ -6,7 +6,7 @@ import json
 import logging
 import sqlite3
 import threading
-from datetime import UTC
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -63,7 +63,7 @@ _SUMMARY_COLUMNS = (
 # Actions that actually rewrote text; everything else (flag/observed/allow) is noise
 # for the console's "what changed" view.
 _TRANSFORMED_ACTIONS = {"pseudonymized", "masked", "stripped"}
-_MAX_CHANGES = 20
+_MAX_CHANGES = 200
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -184,6 +184,11 @@ def _parse_findings(findings_json: str | None) -> list[dict[str, Any]]:
 
 
 def _change_before(finding: dict[str, Any], reverse: dict[str, str]) -> str | None:
+    # New records persist the original span directly. Older records only stored
+    # a replacement, so fall back to the session's pseudonym mapping.
+    stored = finding.get("before")
+    if stored:
+        return stored
     if finding.get("action") != "pseudonymized":
         return None
     replacement = finding.get("replacement")
@@ -385,6 +390,137 @@ class AuditStore:
                 "SELECT COUNT(*) AS media, SUM(COALESCE(size, 0)) AS media_bytes FROM media"
             ).fetchone()
         return {**dict(totals), **dict(sessions), **dict(mappings), **dict(media)}
+
+    def dashboard(self, hours: int = 24) -> dict[str, Any]:
+        """Aggregates for the console dashboard over a trailing time window."""
+        hours = max(1, min(int(hours), 24 * 30))
+        now = datetime.now(UTC)
+        since = (now - timedelta(hours=hours)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+        with self._lock:
+            totals = self._conn.execute(
+                "SELECT COUNT(*) AS requests, SUM(COALESCE(blocked,0)) AS blocked, "
+                "SUM(COALESCE(findings_count,0)) AS findings, "
+                "SUM(COALESCE(total_tokens,0)) AS tokens, SUM(COALESCE(cost_usd,0)) AS cost_usd, "
+                "SUM(CASE WHEN status IN ('error','upstream_error') THEN 1 ELSE 0 END) AS errors "
+                "FROM requests WHERE created_at >= ?",
+                (since,),
+            ).fetchone()
+            rows = self._conn.execute(
+                "SELECT substr(created_at,1,13) || ':00:00Z' AS bucket, COUNT(*) AS requests, "
+                "SUM(COALESCE(blocked,0)) AS blocked, SUM(COALESCE(findings_count,0)) AS findings, "
+                "SUM(COALESCE(total_tokens,0)) AS tokens, SUM(COALESCE(cost_usd,0)) AS cost_usd "
+                "FROM requests WHERE created_at >= ? GROUP BY bucket ORDER BY bucket",
+                (since,),
+            ).fetchall()
+            by_status = self._conn.execute(
+                "SELECT status, COUNT(*) AS count FROM requests WHERE created_at >= ? "
+                "GROUP BY status ORDER BY count DESC",
+                (since,),
+            ).fetchall()
+            by_mode = self._conn.execute(
+                "SELECT mode, COUNT(*) AS count FROM requests WHERE created_at >= ? GROUP BY mode",
+                (since,),
+            ).fetchall()
+            by_model = self._conn.execute(
+                "SELECT COALESCE(model,'(unknown)') AS model, COUNT(*) AS requests, "
+                "SUM(COALESCE(total_tokens,0)) AS tokens, SUM(COALESCE(cost_usd,0)) AS cost_usd "
+                "FROM requests WHERE created_at >= ? GROUP BY model ORDER BY requests DESC LIMIT 12",
+                (since,),
+            ).fetchall()
+            latencies = self._conn.execute(
+                "SELECT latency_ms FROM requests WHERE created_at >= ? AND latency_ms IS NOT NULL "
+                "ORDER BY latency_ms",
+                (since,),
+            ).fetchall()
+            finding_rows = self._conn.execute(
+                "SELECT findings_json FROM requests WHERE created_at >= ? "
+                "AND findings_json IS NOT NULL AND findings_json != '[]' LIMIT 20000",
+                (since,),
+            ).fetchall()
+            top_sessions = self._conn.execute(
+                "SELECT session_id, COUNT(*) AS requests, SUM(COALESCE(findings_count,0)) AS findings, "
+                "SUM(COALESCE(total_tokens,0)) AS tokens FROM requests "
+                "WHERE created_at >= ? AND session_id IS NOT NULL "
+                "GROUP BY session_id ORDER BY requests DESC LIMIT 10",
+                (since,),
+            ).fetchall()
+
+        buckets = {row["bucket"]: dict(row) for row in rows}
+        timeseries: list[dict[str, Any]] = []
+        for offset in range(hours - 1, -1, -1):
+            point = now - timedelta(hours=offset)
+            key = point.isoformat(timespec="seconds").replace("+00:00", "Z")[:13] + ":00:00Z"
+            entry = buckets.get(
+                key,
+                {"bucket": key, "requests": 0, "blocked": 0, "findings": 0, "tokens": 0, "cost_usd": 0.0},
+            )
+            timeseries.append(
+                {
+                    "t": entry["bucket"],
+                    "requests": entry["requests"] or 0,
+                    "blocked": entry["blocked"] or 0,
+                    "findings": entry["findings"] or 0,
+                    "tokens": entry["tokens"] or 0,
+                    "cost_usd": entry["cost_usd"] or 0.0,
+                }
+            )
+
+        kinds: dict[str, int] = {}
+        actions: dict[str, int] = {}
+        detectors: dict[str, int] = {}
+        for row in finding_rows:
+            for finding in _parse_findings(row["findings_json"]):
+                kind = finding.get("kind") or "UNKNOWN"
+                kinds[kind] = kinds.get(kind, 0) + 1
+                action = finding.get("action") or "unknown"
+                actions[action] = actions.get(action, 0) + 1
+                detector = finding.get("detector") or "unknown"
+                detectors[detector] = detectors.get(detector, 0) + 1
+
+        def _top(mapping: dict[str, int], limit: int = 12) -> list[dict[str, Any]]:
+            return [
+                {"name": name, "count": count}
+                for name, count in sorted(mapping.items(), key=lambda item: item[1], reverse=True)[:limit]
+            ]
+
+        latency_values = [row["latency_ms"] for row in latencies if row["latency_ms"] is not None]
+
+        def _percentile(values: list[int], fraction: float) -> int | None:
+            if not values:
+                return None
+            index = min(len(values) - 1, int(round(fraction * (len(values) - 1))))
+            return int(values[index])
+
+        until = now.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        return {
+            "window": {"hours": hours, "since": since, "until": until},
+            "totals": {
+                "requests": totals["requests"] or 0,
+                "blocked": totals["blocked"] or 0,
+                "findings": totals["findings"] or 0,
+                "tokens": totals["tokens"] or 0,
+                "cost_usd": totals["cost_usd"] or 0.0,
+                "errors": totals["errors"] or 0,
+                "blocked_rate": (totals["blocked"] or 0) / totals["requests"] if totals["requests"] else 0.0,
+            },
+            "timeseries": timeseries,
+            "by_status": [dict(row) for row in by_status],
+            "by_mode": [dict(row) for row in by_mode],
+            "by_model": [dict(row) for row in by_model],
+            "by_kind": _top(kinds),
+            "by_action": _top(actions),
+            "by_detector": _top(detectors),
+            "latency": {
+                "count": len(latency_values),
+                "avg": int(sum(latency_values) / len(latency_values)) if latency_values else None,
+                "p50": _percentile(latency_values, 0.5),
+                "p95": _percentile(latency_values, 0.95),
+                "p99": _percentile(latency_values, 0.99),
+                "max": max(latency_values) if latency_values else None,
+            },
+            "top_sessions": [dict(row) for row in top_sessions],
+        }
 
     def prune(self, retention_days: int | None = None) -> int:
         days = self.retention_days if retention_days is None else retention_days

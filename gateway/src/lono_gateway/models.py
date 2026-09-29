@@ -41,6 +41,7 @@ class Finding(BaseModel):
     score: float
     action: FindingAction
     preview: str = ""
+    before: str | None = None
     replacement: str | None = None
 
 
