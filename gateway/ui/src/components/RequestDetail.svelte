@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import type { Api, RequestDetail, ToolEvent } from "../lib/api";
+  import type { Api, Finding, RequestDetail, ToolEvent } from "../lib/api";
   import { fmtCost, fmtDuration, fmtTime, fmtNumber, prettyJson } from "../lib/format";
 
   let {
@@ -15,9 +15,11 @@
     status: (msg: string, isError?: boolean) => void;
   } = $props();
 
+  const TRANSFORMED = new Set(["pseudonymized", "masked", "stripped"]);
+
   let record = $state<RequestDetail | null>(null);
   let tools = $state<ToolEvent[]>([]);
-  let tab = $state<"timeline" | "original" | "sanitized" | "raw" | "final">("timeline");
+  let tab = $state<"values" | "detections" | "original" | "sanitized" | "raw" | "final">("values");
   let reveal = $state(false);
 
   async function load(): Promise<void> {
@@ -43,7 +45,14 @@
 
   onMount(load);
 
-  const changed = $derived((record?.findings ?? []).filter((f) => f.action === "pseudonymized" || f.action === "masked" || f.action === "stripped"));
+  const findings = $derived(record?.findings ?? []);
+  const changed = $derived(findings.filter((f) => TRANSFORMED.has(f.action)));
+
+  function replacementText(finding: Finding): string {
+    if (finding.replacement) return finding.replacement;
+    if (TRANSFORMED.has(finding.action)) return "(removed)";
+    return "(not modified)";
+  }
 
   function stage(value: unknown): string {
     return prettyJson(value) || "(empty)";
@@ -79,8 +88,11 @@
     </div>
 
     <nav class="subtabs">
-      <button class={tab === "timeline" ? "active" : ""} onclick={() => (tab = "timeline")}>
-        Changes ({changed.length})
+      <button class={tab === "values" ? "active" : ""} onclick={() => (tab = "values")}>
+        Values ({changed.length})
+      </button>
+      <button class={tab === "detections" ? "active" : ""} onclick={() => (tab = "detections")}>
+        Detections ({findings.length})
       </button>
       <button class={tab === "original" ? "active" : ""} onclick={() => (tab = "original")}>Original</button>
       <button class={tab === "sanitized" ? "active" : ""} onclick={() => (tab = "sanitized")}>Sanitized</button>
@@ -89,27 +101,88 @@
     </nav>
 
     <div class="drawer-body">
-      {#if tab === "timeline"}
+      {#if tab === "values"}
         {#if changed.length}
-          <ol class="timeline">
-            {#each changed as finding, index (index)}
-              <li>
-                <div class="tl-head">
-                  <span class="pill">{finding.detector}</span>
-                  <span class="pill kind">{finding.kind}</span>
-                  <span class="pill act">{finding.action}</span>
-                  <span class="muted">score {finding.score.toFixed(2)}</span>
-                </div>
-                <div class="tl-change">
-                  <span class="before" class:blur={!reveal}>{finding.before ?? finding.preview ?? "…"}</span>
-                  <span class="arrow">→</span>
-                  <span class="after" class:blur={!reveal}>{finding.replacement ?? "(removed)"}</span>
-                </div>
-              </li>
-            {/each}
-          </ol>
+          <div class="values-bar">
+            <span class="muted small">
+              {changed.length} value{changed.length === 1 ? "" : "s"} <b class="val-detected-text">detected</b> in the
+              request and <b class="val-replaced-text">replaced</b> before it reached the provider. Sensitive values stay
+              hidden until revealed.
+            </span>
+            <button class="small" onclick={() => (reveal = !reveal)}>
+              {reveal ? "Hide sensitive values" : "Reveal sensitive values"}
+            </button>
+          </div>
+          <table class="grid compact values-table">
+            <thead>
+              <tr>
+                <th>category</th>
+                <th>detected value</th>
+                <th>replaced with</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each changed as finding, index (index)}
+                <tr>
+                  <td>
+                    <span class="pill kind">{finding.kind}</span>
+                    <div class="muted small">{finding.detector} · {finding.action}</div>
+                  </td>
+                  <td class="val val-detected">
+                    <button
+                      class="val-btn"
+                      title={reveal ? "click to hide sensitive value" : "click to reveal sensitive value"}
+                      onclick={() => (reveal = !reveal)}
+                    >
+                      <span class:blur={!reveal}>{finding.before ?? "—"}</span>
+                    </button>
+                  </td>
+                  <td class="val val-replaced"><span>{replacementText(finding)}</span></td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         {:else}
-          <div class="empty-state">No text was changed for this request.</div>
+          <div class="empty-state">No values were rewritten for this request.</div>
+        {/if}
+      {:else if tab === "detections"}
+        {#if findings.length}
+          <p class="muted small">
+            Every detection for this request, including spans that were only flagged or observed and left unchanged.
+            Detected values stay hidden until revealed.
+          </p>
+          <table class="grid compact values-table">
+            <thead>
+              <tr>
+                <th>category</th>
+                <th>detector</th>
+                <th>action</th>
+                <th>detected value</th>
+                <th>replaced with</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each findings as finding, index (index)}
+                <tr>
+                  <td><span class="pill kind">{finding.kind}</span></td>
+                  <td class="muted">{finding.detector}</td>
+                  <td><span class="pill act">{finding.action}</span></td>
+                  <td class="val val-detected">
+                    <button
+                      class="val-btn"
+                      title={reveal ? "click to hide sensitive value" : "click to reveal sensitive value"}
+                      onclick={() => (reveal = !reveal)}
+                    >
+                      <span class:blur={!reveal}>{finding.before ?? "—"}</span>
+                    </button>
+                  </td>
+                  <td class="val val-replaced"><span>{replacementText(finding)}</span></td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {:else}
+          <div class="empty-state">No detections for this request.</div>
         {/if}
       {:else}
         <pre class="stage">{stage(

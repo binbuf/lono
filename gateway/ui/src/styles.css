@@ -208,6 +208,15 @@ table.grid.compact th, table.grid.compact td { padding: 5px 8px; }
 .subtabs button.active { background: var(--panel-2); color: var(--fg); }
 .stage { background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 8px; padding: 12px; overflow: auto; max-height: 460px; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
 .stage.small { max-height: 200px; }
+.values-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.values-bar .muted { flex: 1; min-width: 240px; }
+.val-detected-text { color: #ff9c9c; }
+.val-replaced-text { color: #7ff0b0; }
+.values-table td.val { font-family: "JetBrains Mono", Consolas, monospace; font-size: 12px; max-width: 340px; word-break: break-word; }
+.values-table .val-btn { display: block; width: 100%; text-align: left; background: none; border: none; padding: 0; color: inherit; font: inherit; }
+.values-table td.val-detected { color: #ff9c9c; background: rgba(255, 92, 92, .08); cursor: pointer; }
+.values-table td.val-detected:hover { background: rgba(255, 92, 92, .16); }
+.values-table td.val-replaced { color: #7ff0b0; background: rgba(53, 208, 127, .08); }
 .timeline { list-style: none; margin: 0 0 18px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .timeline li { border: 1px solid var(--line-soft); border-radius: 8px; padding: 8px 10px; }
 .tl-head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
