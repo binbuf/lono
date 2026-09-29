@@ -6,6 +6,7 @@ import logging
 import math
 import re
 
+from lono_gateway.detectors.secret_catalog import ENV_NAME_MARKERS, VALUE_PATTERNS
 from lono_gateway.models import Detection
 from lono_gateway.secretsynth import is_synthetic
 from lono_gateway.settings import SecretRule, SecretsConfig
@@ -19,7 +20,7 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str], float]] = [
         re.compile(r"(?i)\baws_secret_access_key\b\s*[:=]\s*['\"]?([A-Za-z0-9/+=]{40})['\"]?"),
         0.95,
     ),
-    ("GITHUB_TOKEN", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b"), 0.99),
+    ("GITHUB_TOKEN", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_\-]{20,}"), 0.99),
     ("GITHUB_PAT", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}\b"), 0.99),
     ("GITLAB_PAT", re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,}\b"), 0.99),
     ("ANTHROPIC_API_KEY", re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{20,}\b"), 0.99),
@@ -126,6 +127,11 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str], float]] = [
     ("AZURE_AD_CLIENT_SECRET", re.compile(r"\b[a-zA-Z0-9_~.]{3}\dQ~[a-zA-Z0-9_~.\-]{31,34}\b"), 0.85),
 ]
 
+# Provider value shapes catalogued from llm_firewall_synthetic_secrets.csv. These
+# match the credential value alone, so a token with no env-var name around it is
+# still caught.
+_SECRET_PATTERNS += [(kind, re.compile(pattern), score) for kind, pattern, score in VALUE_PATTERNS]
+
 # SSH / encryption key material, grouped so each family can be toggled from
 # ``detectors.secrets.key_material``. These are matched by shape (armor headers,
 # OpenSSH base64, PuTTY .ppk framing) rather than by algorithm name.
@@ -219,6 +225,19 @@ _PLACEHOLDER_EXPR_PREFIXES = (
     "settings.",
 )
 _SEGMENT_SPLIT_RE = re.compile(r"[/\\=:.@]+")
+
+# Env-var name markers (``DD_API_KEY``, ``CIRCLECI_TOKEN``, ``POSTMARK_SERVER_TOKEN``
+# …). A whole name or an ``_``-delimited final segment selects credentials whose
+# value has no recognised shape.
+_ENV_NAME_MARKER_RE = re.compile(
+    r"(?:^|_)(?:" + "|".join(sorted(ENV_NAME_MARKERS, key=len, reverse=True)) + r")$"
+)
+# ``NAME=value`` / ``"NAME": "value"`` / ``$env:NAME = value``. The name must be a
+# SCREAMING_SNAKE-style env var so prose such as ``key = <token>`` is left to the
+# entropy heuristic.
+_ENV_ASSIGN_RE = re.compile(
+    r"""(?<![\w.])["']?([A-Z][A-Z0-9_]{2,})["']?\s*[:=]\s*['"]?([^\s'";,]{6,})['"]?"""
+)
 
 
 def _looks_like_placeholder(value: str) -> bool:
@@ -374,6 +393,7 @@ class SecretDetector:
         # the token charset), and would otherwise win overlap resolution purely
         # by starting earlier.
         found.extend(self._custom_scan(text))
+        found.extend(self._env_assignment_scan(text))
         if self.cfg.entropy:
             named_spans = [(detection.start, detection.end) for detection in found]
             for detection in self._entropy_scan(text):
@@ -436,6 +456,49 @@ class SecretDetector:
                         value=value,
                     )
                 )
+        return found
+
+    def _env_assignment_scan(self, text: str) -> list[Detection]:
+        """Catch credentials assigned to a sensitive env-var name.
+
+        Covers the catalogued provider names and aliases whose values have no
+        distinctive shape (``DD_API_KEY=<32 hex>``, ``CIRCLECI_TOKEN=<40 hex>``).
+        The value is what gets masked; the name is only the clue.
+        """
+        found: list[Detection] = []
+        for match in _ENV_ASSIGN_RE.finditer(text):
+            name = match.group(1)
+            lowered = name.lower()
+            # Publishable/public keys are intentionally not secrets.
+            if "public" in lowered or "publishable" in lowered:
+                continue
+            if not _ENV_NAME_MARKER_RE.search(lowered):
+                continue
+            start, end = match.span(2)
+            if end <= start:
+                continue
+            value = text[start:end]
+            if is_synthetic(value):
+                continue
+            if (
+                _looks_like_placeholder(value)
+                or _looks_like_code_name(value)
+                or _looks_like_identifier(value)
+                or _is_screaming_snake(value)
+                or _is_word_list(value)
+            ):
+                continue
+            found.append(
+                Detection(
+                    detector=self.name,
+                    kind=name.upper(),
+                    start=start,
+                    end=end,
+                    score=0.9,
+                    suggested=self.cfg.action,
+                    value=value,
+                )
+            )
         return found
 
     def _entropy_scan(self, text: str) -> list[Detection]:

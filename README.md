@@ -40,7 +40,7 @@ OpenCode / Codex / Claude / Cursor / Harness
 
 | Concern | Behavior |
 |---|---|
-| Secrets | Named patterns (AWS/GitHub/OpenAI/Anthropic/Stripe/JWT/keys, connection strings) plus entropy heuristics. Key material - PEM/OpenSSH private keys, encrypted PKCS#8, OpenPGP (GPG) blocks, PuTTY `.ppk` and SSH public keys - is detected by shape. Named secrets are replaced with a **format-preserving fake** of the same shape (never rehydrated), so the provider cannot tell a request was redacted. Entropy heuristics only flag by default. |
+| Secrets | A provider catalog of value shapes (GitHub/GitLab/Slack/Discord/AWS/Google/Stripe/AI providers and more, keyed by prefix even with no surrounding `KEY=`) plus sensitive env-var names (`DD_API_KEY`, `CIRCLECI_TOKEN`, …) and entropy heuristics. Key material - PEM/OpenSSH private keys, encrypted PKCS#8, OpenPGP (GPG) blocks, PuTTY `.ppk` and SSH public keys - is detected by shape. Named secrets are replaced with a **format-preserving fake** of the same shape (never rehydrated), so the provider cannot tell a request was redacted. Entropy heuristics only flag by default. |
 | PII | Presidio + regex/custom recognizers. Deterministic pseudonyms per session: `Steve → Bob`, `steve@corp.com → bob.smith@example.com`. Rehydrated on the way back. |
 | Prompt injection | Weighted heuristics over prompts, tool results and tool arguments. Flagged in `sanitize`, blockable in `enforce`. |
 | URLs | Scheme allowlist, private/loopback/metadata hosts (`169.254.169.254`), embedded credentials, opaque exfil-style query strings. |
