@@ -22,6 +22,10 @@ x-langfuse-env: &langfuse-env
   SALT: ${SALT:?set SALT in .env}
   ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in .env}
   TELEMETRY_ENABLED: "false"
+  # Langfuse v4 defaults to events_only and rejects the gateway's v3
+  # /api/public/ingestion writes. `dual` keeps the legacy path working while
+  # the tracer moves to OTLP. Remove once traces go through OTLP.
+  LANGFUSE_MIGRATION_V4_WRITE_MODE: dual
   CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
   CLICKHOUSE_URL: http://clickhouse:8123
   CLICKHOUSE_USER: ${CLICKHOUSE_USER:-clickhouse}
@@ -126,6 +130,10 @@ services:
     environment:
       <<: *langfuse-env
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set NEXTAUTH_SECRET in .env}
+      # Next.js standalone binds to $HOSTNAME, which Docker sets to the
+      # container id, so the server only listens on the container IP and the
+      # loopback healthcheck fails. Bind all interfaces instead.
+      HOSTNAME: "0.0.0.0"
       LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:${MINIO_PORT:-9090}
       LANGFUSE_S3_MEDIA_UPLOAD_INTERNAL_ENDPOINT: http://minio:9000
       LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-lono}
@@ -138,7 +146,7 @@ services:
       LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-admin}
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:?set LANGFUSE_INIT_USER_PASSWORD in .env}
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/public/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/api/public/health"]
       interval: 15s
       timeout: 5s
       retries: 12
