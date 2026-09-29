@@ -102,6 +102,19 @@
         </label>
         <label class="field">Entropy threshold<input type="number" step="0.1" bind:value={draft.detectors.secrets.entropy_threshold} /></label>
         <label class="field">Entropy min length<input type="number" bind:value={draft.detectors.secrets.entropy_min_length} /></label>
+        <fieldset class="group">
+          <legend>Key material</legend>
+          <label class="check"><input type="checkbox" bind:checked={draft.detectors.secrets.key_material.enabled} /> enabled</label>
+          <label class="field">Action
+            <select bind:value={draft.detectors.secrets.key_material.action}>
+              <option value="mask">mask</option><option value="flag">flag</option><option value="block">block</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" bind:checked={draft.detectors.secrets.key_material.private_keys} /> private keys (PEM/OpenSSH/encrypted)</label>
+          <label class="check"><input type="checkbox" bind:checked={draft.detectors.secrets.key_material.public_keys} /> SSH public keys</label>
+          <label class="check"><input type="checkbox" bind:checked={draft.detectors.secrets.key_material.gpg} /> OpenPGP (GPG) blocks</label>
+          <label class="check"><input type="checkbox" bind:checked={draft.detectors.secrets.key_material.putty} /> PuTTY .ppk files</label>
+        </fieldset>
       </section>
 
       <section class="card">

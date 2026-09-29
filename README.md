@@ -40,7 +40,7 @@ OpenCode / Codex / Claude / Cursor / Harness
 
 | Concern | Behavior |
 |---|---|
-| Secrets | Named patterns (AWS/GitHub/OpenAI/Anthropic/Stripe/JWT/private keys, connection strings) plus entropy heuristics. Named secrets are replaced with a **format-preserving fake** of the same shape (never rehydrated), so the provider cannot tell a request was redacted. Entropy heuristics only flag by default. |
+| Secrets | Named patterns (AWS/GitHub/OpenAI/Anthropic/Stripe/JWT/keys, connection strings) plus entropy heuristics. Key material - PEM/OpenSSH private keys, encrypted PKCS#8, OpenPGP (GPG) blocks, PuTTY `.ppk` and SSH public keys - is detected by shape. Named secrets are replaced with a **format-preserving fake** of the same shape (never rehydrated), so the provider cannot tell a request was redacted. Entropy heuristics only flag by default. |
 | PII | Presidio + regex/custom recognizers. Deterministic pseudonyms per session: `Steve → Bob`, `steve@corp.com → bob.smith@example.com`. Rehydrated on the way back. |
 | Prompt injection | Weighted heuristics over prompts, tool results and tool arguments. Flagged in `sanitize`, blockable in `enforce`. |
 | URLs | Scheme allowlist, private/loopback/metadata hosts (`169.254.169.254`), embedded credentials, opaque exfil-style query strings. |
@@ -201,6 +201,22 @@ source files. These are not secrets, so the detector ignores them:
 Tune the bar with `detectors.secrets.entropy_threshold`,
 `entropy_min_length`, and `entropy_action` in `config/security.yaml`.
 
+### Key material (SSH / encryption)
+
+`detectors.secrets.key_material` recognizes key material **by shape** and swaps
+it for a format-preserving fake. It is **on by default** and every family can be
+disabled or given its own action:
+
+| Flag | Covers |
+|---|---|
+| `private_keys` | PEM (`RSA`/`EC`/`DSA`), OpenSSH, and encrypted PKCS#8 (`BEGIN ENCRYPTED PRIVATE KEY`) private keys |
+| `public_keys` | OpenSSH public keys (`ssh-rsa`, `ssh-ed25519`, `ecdsa-sha2-*`, `sk-*@openssh.com`) |
+| `gpg` | OpenPGP/GPG armored public and private key blocks |
+| `putty` | PuTTY `.ppk` private key files |
+
+`action` is `mask` (default), `flag`, or `block`, and `enabled` gates the whole
+family. These are editable live from the console's Config page.
+
 ## Configuration
 
 Everything is feature-flagged in `config/security.yaml` (env-substituted with
@@ -211,6 +227,7 @@ Everything is feature-flagged in `config/security.yaml` (env-substituted with
 | `mode` | `observe` / `sanitize` / `enforce` |
 | `fail_closed` | If true, block when a detector (e.g. Presidio) is unavailable |
 | `detectors.secrets.action` | `mask` (default), `flag`, or `block` in enforce mode |
+| `detectors.secrets.key_material` | SSH/GPG/PuTTY key detection: `enabled`, `action`, and per-family toggles |
 | `detectors.pii.actions` | Per-entity action: `pseudonymize`, `mask`, `flag` |
 | `detectors.injection.action` | `flag` or `block` |
 | `pseudonymization.stable_across_sessions` | Same entity ⇒ same pseudonym in every session |

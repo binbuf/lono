@@ -78,6 +78,23 @@ class SecretRule(BaseModel):
     note: str = ""
 
 
+class KeyMaterialConfig(BaseModel):
+    """SSH and encryption key material detection.
+
+    Recognizes PEM/OpenSSH private keys, encrypted PKCS#8 private keys, OpenPGP
+    (GPG) key blocks, PuTTY ``.ppk`` files and SSH public keys by shape and
+    replaces them with a format-preserving fake of the same size. Enabled by
+    default; each family can be turned off individually.
+    """
+
+    enabled: bool = True
+    action: Literal["mask", "flag", "block"] = "mask"
+    private_keys: bool = True
+    public_keys: bool = True
+    gpg: bool = True
+    putty: bool = True
+
+
 class SecretsConfig(BaseModel):
     enabled: bool = True
     action: Literal["mask", "flag", "block"] = "mask"
@@ -85,6 +102,7 @@ class SecretsConfig(BaseModel):
     entropy_threshold: float = 4.2
     entropy_min_length: int = 24
     entropy_action: Literal["flag", "mask"] = "flag"
+    key_material: KeyMaterialConfig = Field(default_factory=KeyMaterialConfig)
     custom: list[SecretRule] = Field(default_factory=list)
 
 

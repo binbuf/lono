@@ -5,7 +5,22 @@ from lono_gateway.detectors.pii import PiiDetector, plausible_entity
 from lono_gateway.detectors.secrets import SecretDetector, shannon_entropy
 from lono_gateway.detectors.urls import UrlDetector
 from lono_gateway.models import Detection
-from lono_gateway.settings import InjectionConfig, PiiConfig, SecretsConfig, UrlsConfig
+from lono_gateway.settings import (
+    InjectionConfig,
+    KeyMaterialConfig,
+    PiiConfig,
+    SecretsConfig,
+    UrlsConfig,
+)
+
+_KEY_MATERIAL_TEXT = "\n".join(
+    [
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFJTBSBgkqhkiG9w0BAQ\n-----END ENCRYPTED PRIVATE KEY-----",
+        "-----BEGIN PGP PRIVATE KEY BLOCK-----\nVersion: GnuPG v2\n\nlQOYBG\n-----END PGP PRIVATE KEY BLOCK-----",
+        "PuTTY-User-Key-File-2: ssh-rsa\nEncryption: none\nPrivate-MAC: 1234567890abcdef1234",
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabcDEF123 user@host",
+    ]
+)
 
 
 def test_shannon_entropy_ranges() -> None:
@@ -68,6 +83,46 @@ def test_url_checks() -> None:
     kinds = {detection.kind for detection in detector.scan(text)}
     assert "URL_PRIVATE_HOST" in kinds
     assert "URL_DISALLOWED_SCHEME" in kinds
+
+
+def test_key_material_patterns_enabled_by_default() -> None:
+    detections = SecretDetector(SecretsConfig()).scan(_KEY_MATERIAL_TEXT)
+    kinds = {detection.kind for detection in detections}
+    assert {
+        "ENCRYPTED_PRIVATE_KEY",
+        "PGP_PRIVATE_KEY",
+        "PUTTY_PRIVATE_KEY",
+        "SSH_PUBLIC_KEY",
+    } <= kinds
+    assert all(detection.suggested == "mask" for detection in detections if detection.kind.endswith("KEY"))
+
+
+def test_key_material_can_be_disabled() -> None:
+    detector = SecretDetector(SecretsConfig(key_material=KeyMaterialConfig(enabled=False)))
+    kinds = {detection.kind for detection in detector.scan(_KEY_MATERIAL_TEXT)}
+    key_kinds = {
+        "PRIVATE_KEY",
+        "ENCRYPTED_PRIVATE_KEY",
+        "PGP_PRIVATE_KEY",
+        "PUTTY_PRIVATE_KEY",
+        "SSH_PUBLIC_KEY",
+    }
+    assert not kinds & key_kinds
+
+
+def test_key_material_families_are_independent() -> None:
+    detector = SecretDetector(SecretsConfig(key_material=KeyMaterialConfig(public_keys=False, gpg=False)))
+    kinds = {detection.kind for detection in detector.scan(_KEY_MATERIAL_TEXT)}
+    assert "ENCRYPTED_PRIVATE_KEY" in kinds
+    assert "PUTTY_PRIVATE_KEY" in kinds
+    assert "PGP_PRIVATE_KEY" not in kinds
+    assert "SSH_PUBLIC_KEY" not in kinds
+
+
+def test_key_material_action_is_configurable() -> None:
+    detector = SecretDetector(SecretsConfig(key_material=KeyMaterialConfig(action="block")))
+    detections = [d for d in detector.scan(_KEY_MATERIAL_TEXT) if d.kind == "SSH_PUBLIC_KEY"]
+    assert detections and all(d.suggested == "block" for d in detections)
 
 
 def test_extended_secret_patterns() -> None:

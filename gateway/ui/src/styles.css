@@ -248,6 +248,8 @@ label.field { margin-bottom: 10px; }
 .presets { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
 .config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
 .config-grid .check, .card .check { margin: 5px 0; color: var(--fg); }
+.group { border: 1px solid var(--line-soft); border-radius: 8px; padding: 8px 10px; margin: 8px 0 0; }
+.group legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; padding: 0 4px; }
 .actions-editor { margin-top: 8px; }
 .actions-editor summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .entity-row { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }

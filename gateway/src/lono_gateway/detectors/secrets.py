@@ -33,14 +33,6 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str], float]] = [
         0.9,
     ),
     (
-        "PRIVATE_KEY",
-        re.compile(
-            r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----"
-            r"[\s\S]{0,8000}?-----END (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----"
-        ),
-        0.99,
-    ),
-    (
         "BEARER_TOKEN",
         re.compile(r"(?i)\bbearer\s+([A-Za-z0-9_\-.=+/]{20,})"),
         0.9,
@@ -132,6 +124,67 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str], float]] = [
     ("ALIBABA_ACCESS_KEY_ID", re.compile(r"\bLTAI[a-z0-9]{20}\b"), 0.9),
     ("CLOJARS_TOKEN", re.compile(r"(?i)\bCLOJARS_[a-z0-9]{60}\b"), 0.9),
     ("AZURE_AD_CLIENT_SECRET", re.compile(r"\b[a-zA-Z0-9_~.]{3}\dQ~[a-zA-Z0-9_~.\-]{31,34}\b"), 0.85),
+]
+
+# SSH / encryption key material, grouped so each family can be toggled from
+# ``detectors.secrets.key_material``. These are matched by shape (armor headers,
+# OpenSSH base64, PuTTY .ppk framing) rather than by algorithm name.
+_KEY_PATTERNS: list[tuple[str, str, re.Pattern[str], float]] = [
+    (
+        "private_keys",
+        "PRIVATE_KEY",
+        re.compile(
+            r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----"
+            r"[\s\S]{0,16000}?-----END (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----"
+        ),
+        0.99,
+    ),
+    (
+        "private_keys",
+        "ENCRYPTED_PRIVATE_KEY",
+        re.compile(
+            r"-----BEGIN ENCRYPTED PRIVATE KEY-----"
+            r"[\s\S]{0,16000}?-----END ENCRYPTED PRIVATE KEY-----"
+        ),
+        0.99,
+    ),
+    (
+        "gpg",
+        "PGP_PRIVATE_KEY",
+        re.compile(
+            r"-----BEGIN PGP PRIVATE KEY BLOCK-----"
+            r"[\s\S]{0,16000}?-----END PGP PRIVATE KEY BLOCK-----"
+        ),
+        0.99,
+    ),
+    (
+        "gpg",
+        "PGP_PUBLIC_KEY",
+        re.compile(
+            r"-----BEGIN PGP PUBLIC KEY BLOCK-----"
+            r"[\s\S]{0,16000}?-----END PGP PUBLIC KEY BLOCK-----"
+        ),
+        0.9,
+    ),
+    (
+        "putty",
+        "PUTTY_PRIVATE_KEY",
+        re.compile(
+            r"PuTTY-User-Key-File-\d+:.*?Private-MAC:[ \t]*[0-9a-fA-F]{16,}",
+            re.DOTALL,
+        ),
+        0.95,
+    ),
+    (
+        "public_keys",
+        "SSH_PUBLIC_KEY",
+        re.compile(
+            r"\b(?:ssh-rsa|ssh-dss|ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|"
+            r"ecdsa-sha2-nistp521|sk-ssh-ed25519@openssh\.com|"
+            r"sk-ecdsa-sha2-nistp256@openssh\.com)\s+AAAA[A-Za-z0-9+/]{15,}={0,3}"
+        ),
+        0.9,
+    ),
 ]
 
 _ENTROPY_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9+/=_\-])[A-Za-z0-9+/=_\-]{20,}(?![A-Za-z0-9+/=_\-])")
@@ -313,6 +366,7 @@ class SecretDetector:
                         value=value,
                     )
                 )
+        found.extend(self._key_scan(text))
         # Named patterns and user rules are precise; run them first so the
         # speculative entropy heuristic can yield to them. An entropy token can
         # span a wider region than the credential itself (e.g.
@@ -329,6 +383,34 @@ class SecretDetector:
                 ):
                     continue
                 found.append(detection)
+        return found
+
+    def _key_scan(self, text: str) -> list[Detection]:
+        km = self.cfg.key_material
+        if not km.enabled:
+            return []
+        found: list[Detection] = []
+        for group, kind, pattern, score in _KEY_PATTERNS:
+            if not getattr(km, group, False):
+                continue
+            for match in pattern.finditer(text):
+                start, end = match.span(1) if match.lastindex else match.span()
+                if end <= start:
+                    continue
+                value = text[start:end]
+                if is_synthetic(value):
+                    continue
+                found.append(
+                    Detection(
+                        detector=self.name,
+                        kind=kind,
+                        start=start,
+                        end=end,
+                        score=score,
+                        suggested=km.action,
+                        value=value,
+                    )
+                )
         return found
 
     def _custom_scan(self, text: str) -> list[Detection]:

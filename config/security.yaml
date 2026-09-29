@@ -17,6 +17,15 @@ detectors:
     entropy_threshold: 4.2
     entropy_min_length: 24
     entropy_action: flag # high-entropy strings are noisy; flag by default
+    # SSH / encryption key material, recognized by shape and replaced with a
+    # format-preserving fake. On by default; each family can be disabled.
+    key_material:
+      enabled: true
+      action: mask # mask | flag | block
+      private_keys: true # PEM, OpenSSH, PKCS#8-encrypted private keys
+      public_keys: true # ssh-rsa / ssh-ed25519 / ecdsa-sha2-* public keys
+      gpg: true # OpenPGP (GPG) public/private key blocks
+      putty: true # PuTTY .ppk private key files
     # Console-managed custom detection rules (exact keys, env var names, or
     # regex). Managed from the Substitutions page under "Secret detection
     # rules". Each rule may override the action (mask | flag | block).

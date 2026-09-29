@@ -41,6 +41,7 @@ _ALLOWED: dict[str, Any] = {
             "entropy_threshold",
             "entropy_min_length",
             "entropy_action",
+            "key_material",
             "custom",
         },
         "pii": {
