@@ -28,6 +28,7 @@ def test_repo_security_yaml_loads(monkeypatch) -> None:
     assert cfg.detectors.pii.engine == "auto"
     assert cfg.detectors.pii.actions["EMAIL_ADDRESS"] == "pseudonymize"
     assert cfg.detectors.pii.actions["CREDIT_CARD"] == "mask"
+    assert "NRP" not in cfg.detectors.pii.actions  # nationality/religion disabled by default
     assert cfg.auth.admin_key == ""
     assert cfg.pseudonymization.secret  # ephemeral secret generated with a warning
     assert cfg.audit.sqlite_path.endswith("audit.db")

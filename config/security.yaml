@@ -31,7 +31,6 @@ detectors:
       LOCATION: pseudonymize
       ORGANIZATION: pseudonymize
       IP_ADDRESS: pseudonymize
-      NRP: pseudonymize
       STREET_ADDRESS: pseudonymize
       POSTAL_CODE: pseudonymize
       CREDIT_CARD: mask
@@ -100,7 +99,6 @@ pseudonymization:
     cities: cities.txt
     companies: companies.txt
     domain_words: domain_words.txt
-    nationalities: nationalities.txt
     street_names: street_names.txt
     street_suffixes: street_suffixes.txt
     # PHONE_NUMBER: phone_numbers.txt

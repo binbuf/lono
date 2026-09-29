@@ -220,7 +220,7 @@ per line (`#` comments allowed). Shipped defaults live in `config/lists/`:
 
 ```
 config/lists/first_names.txt   last_names.txt   cities.txt   companies.txt
-              domain_words.txt nationalities.txt street_names.txt street_suffixes.txt
+              domain_words.txt street_names.txt street_suffixes.txt
 ```
 
 Swap a file, add your own, or override inline. Relative names resolve against
@@ -250,7 +250,7 @@ conversation and rehydrates correctly (`gateway/src/lono_gateway/pools.py`).
 | `LOCATION` | `cities.txt` |
 | `ORGANIZATION` | `companies.txt` |
 | `STREET_ADDRESS` | `street_names.txt` + `street_suffixes.txt` (plus a number/unit) |
-| `NRP`, `NATIONALITY` | `nationalities.txt` |
+
 | `URL`, `DOMAIN_NAME` | `domain_words.txt` |
 | `PROJECT`, `PROJECT_CODENAME`, `PROJECT_NAME` | `domain_words.txt` → `Project Aurora` |
 
@@ -293,6 +293,15 @@ pseudonymization:
 
 This also works for categories surfaced by Presidio or your own custom
 recognizers, and for watchlist terms via `replacement_type`.
+
+#### Nationality / NRP is not handled
+
+Presidio's `NRP` category covers nationality, religious and political
+affiliation. Replacements there are unreliable and frequently make provider
+answers wrong without protecting anything meaningful, so Lono does not handle
+it: `NRP` has no entry in `detectors.pii.actions`, and the pipeline drops any
+Presidio entity that has no configured action. If you ever want it, add your
+own action and/or a watchlist term with `replacement_type: NRP`.
 
 ### Watchlist (project codenames, internal terms)
 

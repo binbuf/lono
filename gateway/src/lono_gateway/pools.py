@@ -47,11 +47,6 @@ DOMAIN_WORDS = [
     "ridge", "summit", "tundra", "umbra", "vertex", "willow", "xenon", "yarrow", "zephyr",
 ]
 
-NATIONALITIES = [
-    "Canadian", "Brazilian", "Norwegian", "Japanese", "Kenyan", "Portuguese", "Australian",
-    "Mexican", "Polish", "Thai", "Dutch", "Argentine", "Finnish", "Moroccan", "Vietnamese",
-]
-
 STREET_NAMES = [
     "Maple", "Oak", "Cedar", "Birch", "Pine", "Elm", "Walnut", "Chestnut", "Juniper", "Aspen",
     "Lakeview", "Riverside", "Hillcrest", "Sunset", "Highland", "Meadow", "Prairie", "Canyon",
@@ -69,7 +64,6 @@ DEFAULT_LISTS: dict[str, list[str]] = {
     "cities": CITIES,
     "companies": COMPANIES,
     "domain_words": DOMAIN_WORDS,
-    "nationalities": NATIONALITIES,
     "street_names": STREET_NAMES,
     "street_suffixes": STREET_SUFFIXES,
 }
@@ -194,9 +188,6 @@ def generate_pseudonym(kind: str, original: str, rng: random.Random, pools: Pool
 
     if kind == "IBAN_CODE":
         return f"GB00LONO{rng.randint(10**9, 10**10 - 1)}"
-
-    if kind in {"NRP", "NATIONALITY"}:
-        return rng.choice(pools.get("nationalities"))
 
     if kind in {"URL", "DOMAIN_NAME"}:
         word = rng.choice(pools.get("domain_words"))

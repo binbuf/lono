@@ -83,6 +83,24 @@ def test_extended_secret_patterns() -> None:
     assert {"DIGITALOCEAN_TOKEN", "SHOPIFY_TOKEN", "SENDGRID_KEY", "NPM_TOKEN"} <= kinds
 
 
+def test_unconfigured_presidio_entity_is_dropped() -> None:
+    from lono_gateway.models import Detection
+    from lono_gateway.pipeline.engine import SecurityPipeline
+    from lono_gateway.settings import SecurityConfig
+
+    cfg = SecurityConfig()
+    cfg.detectors.pii.engine = "regex"
+    pipeline = SecurityPipeline(cfg, store=None)
+
+    detections = [
+        Detection(detector="pii.presidio", kind="NRP", start=0, end=8, score=0.85),
+        Detection(detector="pii.presidio", kind="PERSON", start=0, end=8, score=0.85),
+        Detection(detector="pii.regex", kind="EMPLOYEE_ID", start=0, end=8, score=0.9),
+    ]
+    kept = {detection.kind for detection in pipeline._keep_configured_pii(detections)}
+    assert kept == {"PERSON", "EMPLOYEE_ID"}
+
+
 async def test_pii_street_postal_and_crypto() -> None:
     detector = PiiDetector(PiiConfig(engine="regex"), fail_closed=False)
     text = "ship to 1600 Pennsylvania Avenue NW, CA 90210, wallet bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"

@@ -25,7 +25,6 @@ DEFAULT_PII_ACTIONS: dict[str, str] = {
     "LOCATION": "pseudonymize",
     "ORGANIZATION": "pseudonymize",
     "IP_ADDRESS": "pseudonymize",
-    "NRP": "pseudonymize",
     "STREET_ADDRESS": "pseudonymize",
     "POSTAL_CODE": "pseudonymize",
     "CREDIT_CARD": "mask",

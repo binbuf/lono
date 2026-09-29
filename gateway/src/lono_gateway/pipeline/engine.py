@@ -94,6 +94,15 @@ class SecurityPipeline:
     def invalidate_overrides(self) -> None:
         self._overrides_loaded_at = 0.0
 
+    def _keep_configured_pii(self, detections: list[Detection]) -> list[Detection]:
+        """Drop Presidio entities that have no configured action (e.g. NRP)."""
+        actions = self.cfg.detectors.pii.actions
+        return [
+            detection
+            for detection in detections
+            if detection.detector == "pii.regex" or detection.kind in actions
+        ]
+
     def _override_allowed(self, detection: Detection, span_value: str) -> bool:
         active = self._active_overrides()
         if not active.categories and not active.values:
@@ -163,7 +172,7 @@ class SecurityPipeline:
     ) -> list[Detection]:
         detections = self.secrets.scan(text)
         if use_pii:
-            detections.extend(await self.pii.scan(text))
+            detections.extend(self._keep_configured_pii(await self.pii.scan(text)))
         if use_urls:
             detections.extend(self.urls.scan(text))
         if use_injection:
@@ -279,7 +288,7 @@ class SecurityPipeline:
         if cfg.secrets:
             detections.extend(self.secrets.scan(text))
         if cfg.pii:
-            detections.extend(await self.pii.scan(text))
+            detections.extend(self._keep_configured_pii(await self.pii.scan(text)))
         if cfg.injection:
             detections.extend(self.injection.scan(text))
         if getattr(cfg, "watchlist", True):
